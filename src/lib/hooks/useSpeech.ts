@@ -49,6 +49,7 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const onTranscriptRef = useRef(onTranscript);
   const onSpeakEndRef = useRef(onSpeakEnd);
+  const audioUnlockedRef = useRef(false);
 
   useEffect(() => {
     onTranscriptRef.current = onTranscript;
@@ -66,6 +67,17 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
     countdownIntervalRef.current = null;
     setSilenceCountdown(null);
   }, []);
+
+  // ── Unlock audio context on first user gesture ──
+const unlockAudio = useCallback(() => {
+  if (audioUnlockedRef.current) return;
+  audioUnlockedRef.current = true;
+
+  // Play a silent audio to unlock autoplay on mobile
+  const silence = new Audio('data:audio/mp3;base64,SUQzBAAAAAABEVRYWFgAAAAtAAADY29tbWVudABCaWdTb3VuZEJhbmsgU291bmQgRWZmZWN0cyBCaWJsaW90aGVjYQBURU5DAAAAHQAAA1N3aXRjaCBTb3VuZHMgLSBGcmVlAFRJVDIAAAAGAAADTm9uZQBUQUxCAAAABgAAA05vbmUAVFBFMQAAAAYAAANOb25lAFRDT04AAAAGAAADTm9uZQBDT01NAAAALQAAA2VuZwBCaWdTb3VuZEJhbmsgU291bmQgRWZmZWN0cyBCaWJsaW90aGVjYQD/+0DEAAAAAAAAAAAAAAAAAAAAAST+AAAAAAP/+0DECAAAAAAAAAAAAAAAAAAAAf/7QsQKAAABpAAAAAAAAANIAAAAATEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV');
+  silence.volume = 0;
+  silence.play().catch(() => {});
+}, []);
 
   // ── Start silence timer ────────────────────
   const startSilenceTimer = useCallback(() => {
@@ -241,16 +253,7 @@ recognition.interimResults = true;
         setStatus('idle');
       };
 
-      audio.play().catch(() => {
-  // Mobile autoplay blocked — try again on next user interaction
-  const resumeOnTouch = () => {
-    audio.play();
-    document.removeEventListener('touchstart', resumeOnTouch);
-    document.removeEventListener('click', resumeOnTouch);
-  };
-  document.addEventListener('touchstart', resumeOnTouch);
-  document.addEventListener('click', resumeOnTouch);
-});
+      audio.play();
 
     } catch (err) {
       console.error('[speakBlob Error]', err);
@@ -293,6 +296,7 @@ recognition.interimResults = true;
     speak,
     speakBlob,
     startListening,
+    unlockAudio,
     cancel,
   };
 }

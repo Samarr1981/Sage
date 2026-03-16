@@ -298,7 +298,7 @@ speakBlob(audioBlob);
 
   const handleSpeakEnd = useCallback(() => {}, []);
 
-  const { status, transcript, isSupported, silenceCountdown, speak, speakBlob, cancel } = useSpeech({
+  const { status, transcript, isSupported, silenceCountdown, speak, speakBlob, startListening, unlockAudio, cancel } = useSpeech({
     onTranscript: handleTranscript,
     onSpeakEnd: handleSpeakEnd,
   });
@@ -435,7 +435,7 @@ speakBlob(audioBlob);
 
             {error && <p className="text-xs text-[var(--red)]">{error}</p>}
 
-            <button onClick={handleStart} disabled={!role.trim()}
+            <button onClick={() => { unlockAudio(); handleStart(); }} disabled={!role.trim()}
               className="w-full py-3 rounded-lg text-sm tracking-widest uppercase transition-all duration-300 disabled:opacity-30 disabled:cursor-not-allowed mt-2"
               style={{
                 background: role.trim() ? 'var(--accent)' : 'var(--surface)',
