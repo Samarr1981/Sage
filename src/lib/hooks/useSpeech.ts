@@ -43,9 +43,9 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
   const [silenceCountdown, setSilenceCountdown] = useState<number | null>(null);
 
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
-  // Single reusable audio element — created once on unlock
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const transcriptRef = useRef('');
+  const isListeningRef = useRef(false);
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const onTranscriptRef = useRef(onTranscript);
@@ -70,6 +70,7 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
 
   // ── Start silence timer ────────────────────
   const startSilenceTimer = useCallback(() => {
+    // Always clear existing timer first — this is the reset
     clearSilenceTimer();
 
     let secondsLeft = 3;
@@ -86,7 +87,8 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
     silenceTimerRef.current = setTimeout(() => {
       setSilenceCountdown(null);
       const finalAnswer = transcriptRef.current.trim();
-      if (finalAnswer) {
+      if (finalAnswer && isListeningRef.current) {
+        isListeningRef.current = false;
         setStatus('processing');
         try { recognitionRef.current?.stop(); } catch (e) { /* ignore */ }
         onTranscriptRef.current(finalAnswer);
@@ -107,7 +109,8 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
     }
 
     const recognition = new SpeechRecognition();
-    recognition.continuous = false;
+    // continuous true — mic stays open through pauses
+    recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
     recognition.maxAlternatives = 1;
@@ -119,43 +122,53 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
         if (result.isFinal) {
-          final += result[0].transcript;
+          final += result[0].transcript + ' ';
         } else {
           interim += result[0].transcript;
         }
       }
 
       if (final) {
-        transcriptRef.current = final;
-        setTranscript(final);
-        startSilenceTimer();
-      } else if (interim) {
-        setTranscript(interim);
+        transcriptRef.current += final;
+      }
+
+      const displayed = (transcriptRef.current + interim).trim();
+      setTranscript(displayed);
+
+      // Reset silence timer every time speech comes in
+      if (displayed) {
         startSilenceTimer();
       }
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      // no-speech is fine — mic is open but user hasn't spoken yet
       if (event.error === 'no-speech') return;
       console.error('[Speech Recognition Error]', event.error);
-      setStatus('idle');
     };
 
     recognition.onend = () => {
-      // controlled manually
+      // If we're still supposed to be listening, restart
+      // This handles Chrome's auto-stop after silence
+      if (isListeningRef.current) {
+        try {
+          recognition.start();
+        } catch (e) {
+          // ignore — already restarting
+        }
+      }
     };
 
     recognitionRef.current = recognition;
 
     return () => {
+      isListeningRef.current = false;
       recognition.abort();
       clearSilenceTimer();
     };
   }, [clearSilenceTimer, startSilenceTimer]);
 
   // ── Unlock audio on first user gesture ────
-  // Creates the single Audio element that will be
-  // reused for ALL questions in the session
   const unlockAudio = useCallback(() => {
     if (audioRef.current) return;
     const audio = new Audio();
@@ -167,6 +180,7 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
   // ── Speak using OpenAI TTS API ─────────────
   const speak = useCallback(async (text: string) => {
     setStatus('speaking');
+    isListeningRef.current = false;
 
     try {
       const res = await fetch('/api/tts', {
@@ -179,7 +193,6 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
 
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-
       const audio = audioRef.current || new Audio();
       audioRef.current = audio;
       audio.src = url;
@@ -192,12 +205,13 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
           transcriptRef.current = '';
           setTranscript('');
           clearSilenceTimer();
+          isListeningRef.current = true;
           try {
             recognitionRef.current?.start();
           } catch (e) {
             console.error('[Recognition Start Error]', e);
           }
-        }, 300);
+        }, 500);
       };
 
       audio.onerror = () => {
@@ -216,6 +230,7 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
   // ── speakBlob — play pre-fetched audio ─────
   const speakBlob = useCallback((blob: Blob) => {
     setStatus('speaking');
+    isListeningRef.current = false;
 
     try {
       const url = URL.createObjectURL(blob);
@@ -231,12 +246,13 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
           transcriptRef.current = '';
           setTranscript('');
           clearSilenceTimer();
+          isListeningRef.current = true;
           try {
             recognitionRef.current?.start();
           } catch (e) {
             console.error('[Recognition Start Error]', e);
           }
-        }, 300);
+        }, 500);
       };
 
       audio.onerror = () => {
@@ -261,6 +277,7 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
     transcriptRef.current = '';
     setTranscript('');
     setStatus('listening');
+    isListeningRef.current = true;
     clearSilenceTimer();
     try {
       recognitionRef.current.start();
@@ -271,6 +288,7 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
 
   // ── Cancel everything ──────────────────────
   const cancel = useCallback(() => {
+    isListeningRef.current = false;
     clearSilenceTimer();
     recognitionRef.current?.abort();
     if (audioRef.current) {
