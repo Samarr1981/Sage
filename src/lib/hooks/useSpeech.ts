@@ -43,13 +43,13 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
   const [silenceCountdown, setSilenceCountdown] = useState<number | null>(null);
 
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+  // Single reusable audio element — created once on unlock
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const transcriptRef = useRef('');
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const onTranscriptRef = useRef(onTranscript);
   const onSpeakEndRef = useRef(onSpeakEnd);
-  const audioUnlockedRef = useRef(false);
 
   useEffect(() => {
     onTranscriptRef.current = onTranscript;
@@ -67,17 +67,6 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
     countdownIntervalRef.current = null;
     setSilenceCountdown(null);
   }, []);
-
-  // ── Unlock audio context on first user gesture ──
-const unlockAudio = useCallback(() => {
-  if (audioUnlockedRef.current) return;
-  audioUnlockedRef.current = true;
-
-  // Play a silent audio to unlock autoplay on mobile
-  const silence = new Audio('data:audio/mp3;base64,SUQzBAAAAAABEVRYWFgAAAAtAAADY29tbWVudABCaWdTb3VuZEJhbmsgU291bmQgRWZmZWN0cyBCaWJsaW90aGVjYQBURU5DAAAAHQAAA1N3aXRjaCBTb3VuZHMgLSBGcmVlAFRJVDIAAAAGAAADTm9uZQBUQUxCAAAABgAAA05vbmUAVFBFMQAAAAYAAANOb25lAFRDT04AAAAGAAADTm9uZQBDT01NAAAALQAAA2VuZwBCaWdTb3VuZEJhbmsgU291bmQgRWZmZWN0cyBCaWJsaW90aGVjYQD/+0DEAAAAAAAAAAAAAAAAAAAAAST+AAAAAAP/+0DECAAAAAAAAAAAAAAAAAAAAf/7QsQKAAABpAAAAAAAAANIAAAAATEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV');
-  silence.volume = 0;
-  silence.play().catch(() => {});
-}, []);
 
   // ── Start silence timer ────────────────────
   const startSilenceTimer = useCallback(() => {
@@ -118,33 +107,33 @@ const unlockAudio = useCallback(() => {
     }
 
     const recognition = new SpeechRecognition();
- recognition.continuous = false;
-recognition.interimResults = true;
+    recognition.continuous = false;
+    recognition.interimResults = true;
     recognition.lang = 'en-US';
     recognition.maxAlternatives = 1;
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
-  let interim = '';
-  let final = '';
+      let interim = '';
+      let final = '';
 
-  for (let i = event.resultIndex; i < event.results.length; i++) {
-    const result = event.results[i];
-    if (result.isFinal) {
-      final += result[0].transcript;
-    } else {
-      interim += result[0].transcript;
-    }
-  }
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (result.isFinal) {
+          final += result[0].transcript;
+        } else {
+          interim += result[0].transcript;
+        }
+      }
 
-  if (final) {
-    transcriptRef.current = final;
-    setTranscript(final);
-    startSilenceTimer();
-  } else if (interim) {
-    setTranscript(interim);
-    startSilenceTimer();
-  }
-};
+      if (final) {
+        transcriptRef.current = final;
+        setTranscript(final);
+        startSilenceTimer();
+      } else if (interim) {
+        setTranscript(interim);
+        startSilenceTimer();
+      }
+    };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
       if (event.error === 'no-speech') return;
@@ -153,7 +142,7 @@ recognition.interimResults = true;
     };
 
     recognition.onend = () => {
-      // do nothing — controlled manually
+      // controlled manually
     };
 
     recognitionRef.current = recognition;
@@ -164,16 +153,22 @@ recognition.interimResults = true;
     };
   }, [clearSilenceTimer, startSilenceTimer]);
 
+  // ── Unlock audio on first user gesture ────
+  // Creates the single Audio element that will be
+  // reused for ALL questions in the session
+  const unlockAudio = useCallback(() => {
+    if (audioRef.current) return;
+    const audio = new Audio();
+    audio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+    audio.play().catch(() => {});
+    audioRef.current = audio;
+  }, []);
+
   // ── Speak using OpenAI TTS API ─────────────
   const speak = useCallback(async (text: string) => {
     setStatus('speaking');
 
     try {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-      }
-
       const res = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -184,12 +179,13 @@ recognition.interimResults = true;
 
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
+
+      const audio = audioRef.current || new Audio();
       audioRef.current = audio;
+      audio.src = url;
 
       audio.onended = () => {
         URL.revokeObjectURL(url);
-        audioRef.current = null;
         setStatus('listening');
         onSpeakEndRef.current();
         setTimeout(() => {
@@ -217,23 +213,18 @@ recognition.interimResults = true;
     }
   }, [clearSilenceTimer]);
 
-  // ── Play a pre-fetched audio blob ──────────
+  // ── speakBlob — play pre-fetched audio ─────
   const speakBlob = useCallback((blob: Blob) => {
     setStatus('speaking');
 
     try {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-      }
-
       const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
+      const audio = audioRef.current || new Audio();
       audioRef.current = audio;
+      audio.src = url;
 
       audio.onended = () => {
         URL.revokeObjectURL(url);
-        audioRef.current = null;
         setStatus('listening');
         onSpeakEndRef.current();
         setTimeout(() => {
@@ -253,7 +244,10 @@ recognition.interimResults = true;
         setStatus('idle');
       };
 
-      audio.play();
+      audio.play().catch(err => {
+        console.error('[Audio play error]', err);
+        setStatus('idle');
+      });
 
     } catch (err) {
       console.error('[speakBlob Error]', err);
@@ -281,7 +275,7 @@ recognition.interimResults = true;
     recognitionRef.current?.abort();
     if (audioRef.current) {
       audioRef.current.pause();
-      audioRef.current = null;
+      audioRef.current.src = '';
     }
     transcriptRef.current = '';
     setStatus('idle');
