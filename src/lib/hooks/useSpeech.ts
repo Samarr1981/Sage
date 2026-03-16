@@ -43,32 +43,31 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
   const [silenceCountdown, setSilenceCountdown] = useState<number | null>(null);
 
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
-  const synthRef = useRef<SpeechSynthesis | null>(null);
-  const accumulatedRef = useRef('');
-  const isListeningRef = useRef(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const transcriptRef = useRef('');
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const onTranscriptRef = useRef(onTranscript);
+  const onSpeakEndRef = useRef(onSpeakEnd);
 
   useEffect(() => {
     onTranscriptRef.current = onTranscript;
   }, [onTranscript]);
 
+  useEffect(() => {
+    onSpeakEndRef.current = onSpeakEnd;
+  }, [onSpeakEnd]);
+
   // ── Clear silence timer ────────────────────
   const clearSilenceTimer = useCallback(() => {
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-    }
-    if (countdownIntervalRef.current) {
-      clearInterval(countdownIntervalRef.current);
-      countdownIntervalRef.current = null;
-    }
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+    silenceTimerRef.current = null;
+    countdownIntervalRef.current = null;
     setSilenceCountdown(null);
   }, []);
 
   // ── Start silence timer ────────────────────
-  // Submits answer after 3 seconds of silence
   const startSilenceTimer = useCallback(() => {
     clearSilenceTimer();
 
@@ -79,18 +78,14 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
       secondsLeft -= 1;
       setSilenceCountdown(secondsLeft);
       if (secondsLeft <= 0) {
-        if (countdownIntervalRef.current) {
-          clearInterval(countdownIntervalRef.current);
-        }
+        if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
       }
     }, 1000);
 
     silenceTimerRef.current = setTimeout(() => {
       setSilenceCountdown(null);
-      const finalAnswer = accumulatedRef.current.trim();
-      if (finalAnswer && isListeningRef.current) {
-        isListeningRef.current = false;
-        accumulatedRef.current = '';
+      const finalAnswer = transcriptRef.current.trim();
+      if (finalAnswer) {
         setStatus('processing');
         try { recognitionRef.current?.stop(); } catch (e) { /* ignore */ }
         onTranscriptRef.current(finalAnswer);
@@ -98,121 +93,169 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
     }, 3000);
   }, [clearSilenceTimer]);
 
-  // ── Setup on mount ─────────────────────────
+  // ── Setup speech recognition ───────────────
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
 
-    if (!SpeechRecognition || !window.speechSynthesis) {
+    if (!SpeechRecognition) {
       setIsSupported(false);
       return;
     }
 
-    synthRef.current = window.speechSynthesis;
-
     const recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = true;
+ recognition.continuous = false;
+recognition.interimResults = true;
     recognition.lang = 'en-US';
     recognition.maxAlternatives = 1;
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
-      let interim = '';
-      let final = '';
+  let interim = '';
+  let final = '';
 
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const result = event.results[i];
-        if (result.isFinal) {
-          final += result[0].transcript + ' ';
-        } else {
-          interim += result[0].transcript;
-        }
-      }
+  for (let i = event.resultIndex; i < event.results.length; i++) {
+    const result = event.results[i];
+    if (result.isFinal) {
+      final += result[0].transcript;
+    } else {
+      interim += result[0].transcript;
+    }
+  }
 
-      if (final) {
-        accumulatedRef.current += final;
-      }
-
-      const displayed = (accumulatedRef.current + interim).trim();
-      setTranscript(displayed);
-
-      // Reset silence timer every time new speech comes in
-      if (displayed) {
-        startSilenceTimer();
-      }
-    };
+  if (final) {
+    transcriptRef.current = final;
+    setTranscript(final);
+    startSilenceTimer();
+  } else if (interim) {
+    setTranscript(interim);
+    startSilenceTimer();
+  }
+};
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      if (event.error === 'no-speech') {
-        if (isListeningRef.current) {
-          try { recognition.start(); } catch (e) { /* ignore */ }
-        }
-        return;
-      }
+      if (event.error === 'no-speech') return;
       console.error('[Speech Recognition Error]', event.error);
+      setStatus('idle');
     };
 
     recognition.onend = () => {
-      if (isListeningRef.current) {
-        try { recognition.start(); } catch (e) { /* ignore */ }
-      }
+      // do nothing — controlled manually
     };
 
     recognitionRef.current = recognition;
 
     return () => {
-      isListeningRef.current = false;
-      clearSilenceTimer();
       recognition.abort();
-      synthRef.current?.cancel();
+      clearSilenceTimer();
     };
-  }, [startSilenceTimer, clearSilenceTimer]);
+  }, [clearSilenceTimer, startSilenceTimer]);
 
-  // ── Speak ──────────────────────────────────
-  const speak = useCallback((text: string) => {
-    if (!synthRef.current) return;
-
-    synthRef.current.cancel();
+  // ── Speak using OpenAI TTS API ─────────────
+  const speak = useCallback(async (text: string) => {
     setStatus('speaking');
 
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1.1;
-utterance.pitch = 1.05;
-utterance.volume = 1.0;
+    try {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
 
-    const voices = synthRef.current.getVoices();
-    const preferred = voices.find(v => v.name === 'Google US English') ||
-  voices.find(v => v.name.includes('Samantha')) ||
-  voices.find(v => v.name.includes('Alex')) ||
-  voices.find(v => v.lang === 'en-US' && !v.name.includes('Google')) ||
-  voices.find(v => v.lang === 'en-US');
-    if (preferred) utterance.voice = preferred;
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
 
-    utterance.onend = () => {
-      setStatus('listening');
-      onSpeakEnd();
-      setTimeout(() => startListening(), 300);
-    };
+      if (!res.ok) throw new Error('TTS request failed');
 
-    utterance.onerror = () => {
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        audioRef.current = null;
+        setStatus('listening');
+        onSpeakEndRef.current();
+        setTimeout(() => {
+          transcriptRef.current = '';
+          setTranscript('');
+          clearSilenceTimer();
+          try {
+            recognitionRef.current?.start();
+          } catch (e) {
+            console.error('[Recognition Start Error]', e);
+          }
+        }, 300);
+      };
+
+      audio.onerror = () => {
+        URL.revokeObjectURL(url);
+        setStatus('idle');
+      };
+
+      await audio.play();
+
+    } catch (err) {
+      console.error('[TTS Error]', err);
       setStatus('idle');
-    };
+    }
+  }, [clearSilenceTimer]);
 
-    synthRef.current.speak(utterance);
-  }, [onSpeakEnd]);
+  // ── Play a pre-fetched audio blob ──────────
+  const speakBlob = useCallback((blob: Blob) => {
+    setStatus('speaking');
+
+    try {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        audioRef.current = null;
+        setStatus('listening');
+        onSpeakEndRef.current();
+        setTimeout(() => {
+          transcriptRef.current = '';
+          setTranscript('');
+          clearSilenceTimer();
+          try {
+            recognitionRef.current?.start();
+          } catch (e) {
+            console.error('[Recognition Start Error]', e);
+          }
+        }, 300);
+      };
+
+      audio.onerror = () => {
+        URL.revokeObjectURL(url);
+        setStatus('idle');
+      };
+
+      audio.play();
+
+    } catch (err) {
+      console.error('[speakBlob Error]', err);
+      setStatus('idle');
+    }
+  }, [clearSilenceTimer]);
 
   // ── Start listening ────────────────────────
   const startListening = useCallback(() => {
     if (!recognitionRef.current) return;
-
-    accumulatedRef.current = '';
+    transcriptRef.current = '';
     setTranscript('');
     setStatus('listening');
-    isListeningRef.current = true;
     clearSilenceTimer();
-
     try {
       recognitionRef.current.start();
     } catch (e) {
@@ -222,11 +265,13 @@ utterance.volume = 1.0;
 
   // ── Cancel everything ──────────────────────
   const cancel = useCallback(() => {
-    isListeningRef.current = false;
     clearSilenceTimer();
     recognitionRef.current?.abort();
-    synthRef.current?.cancel();
-    accumulatedRef.current = '';
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    transcriptRef.current = '';
     setStatus('idle');
     setTranscript('');
   }, [clearSilenceTimer]);
@@ -237,6 +282,7 @@ utterance.volume = 1.0;
     isSupported,
     silenceCountdown,
     speak,
+    speakBlob,
     startListening,
     cancel,
   };
