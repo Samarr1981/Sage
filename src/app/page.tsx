@@ -280,19 +280,15 @@ export default function Home() {
       // Step 2 — prefetch audio and show question at the same time
       const nextQuestion = data.question;
 
-      const [audioBlob] = await Promise.all([
-        // Fetch TTS audio
-        fetch('/api/tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: nextQuestion }),
-        }).then(r => r.blob()),
-        // Show question on screen immediately
-        Promise.resolve(setCurrentQuestion(nextQuestion)),
-      ]);
+      const audioRes = await fetch('/api/tts', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ text: nextQuestion }),
+});
 
-      // Step 3 — play the already-fetched audio immediately
-      speakBlob(audioBlob);
+const audioBlob = await audioRes.blob();
+setCurrentQuestion(nextQuestion);
+speakBlob(audioBlob);
 
     } catch (err) {
       console.error(err);

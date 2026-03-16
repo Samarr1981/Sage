@@ -241,7 +241,16 @@ recognition.interimResults = true;
         setStatus('idle');
       };
 
-      audio.play();
+      audio.play().catch(() => {
+  // Mobile autoplay blocked — try again on next user interaction
+  const resumeOnTouch = () => {
+    audio.play();
+    document.removeEventListener('touchstart', resumeOnTouch);
+    document.removeEventListener('click', resumeOnTouch);
+  };
+  document.addEventListener('touchstart', resumeOnTouch);
+  document.addEventListener('click', resumeOnTouch);
+});
 
     } catch (err) {
       console.error('[speakBlob Error]', err);
