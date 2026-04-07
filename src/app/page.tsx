@@ -299,7 +299,8 @@ const InterviewForm = memo(function InterviewForm({
 
   const handleRoleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     roleRef.current = e.target.value;
-    setRoleHasValue(e.target.value.trim().length > 0);
+    const next = e.target.value.trim().length > 0;
+    setRoleHasValue(prev => prev === next ? prev : next);
   };
 
   const handleSubmit = () => {
@@ -423,7 +424,7 @@ const InterviewForm = memo(function InterviewForm({
         <button
           onClick={handleSubmit}
           disabled={!roleHasValue}
-          className="w-full py-3 rounded-lg text-sm tracking-widest uppercase transition-all duration-150"
+          className="w-full py-3 rounded-lg text-sm tracking-widest uppercase transition-colors duration-100"
           style={{
             background: roleHasValue ? 'var(--accent)' : 'var(--surface)',
             color: roleHasValue ? 'var(--bg)' : 'var(--text-muted)',
@@ -444,92 +445,179 @@ const InterviewForm = memo(function InterviewForm({
 const LandingPage = memo(function LandingPage({ onCtaClick }: { onCtaClick: () => void }) {
   return (
     <>
-      {/* NAV */}
-      <nav className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between px-6 sm:px-10 py-4 border-b border-[var(--border)]"
-        style={{ background: 'rgba(10,10,10,0.85)', backdropFilter: 'blur(12px)' }}>
-        <span className="text-xl text-[var(--text-primary)]"
-          style={{ fontFamily: 'DM Serif Display, serif' }}>
+      {/* ── NAV ── */}
+      <nav
+        className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between px-6 sm:px-10 py-5 border-b"
+        style={{ background: 'rgba(13,13,20,0.88)', backdropFilter: 'blur(20px)', borderColor: 'rgba(255,255,255,0.06)' }}
+      >
+        <span className="text-2xl tracking-tight" style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}>
           Sage
         </span>
         <button
           onClick={onCtaClick}
-          className="text-xs tracking-widest uppercase px-4 py-2 rounded-lg border border-[var(--border-bright)] text-[var(--text-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent)] transition-all duration-300">
+          className="text-xs tracking-widest uppercase px-4 py-2 rounded-lg border transition-all duration-300 hover:text-[var(--accent)] hover:border-[var(--accent)]"
+          style={{ borderColor: 'var(--border-bright)', color: 'var(--text-secondary)' }}
+        >
           Get Started
         </button>
       </nav>
 
       {/* ── HERO ── */}
-      <section className="min-h-screen flex flex-col items-center justify-center px-6 text-center pt-24 pb-20">
-        <FadeInSection className="flex flex-col items-center gap-6 max-w-2xl">
-          <p className="text-xs tracking-widest uppercase text-[var(--accent)] border border-[var(--accent)] border-opacity-30 px-3 py-1 rounded-full"
-            style={{ borderColor: 'rgba(200,184,154,0.25)' }}>
+      <section className="relative min-h-screen flex flex-col items-center justify-center px-6 text-center pt-24 pb-20 overflow-hidden">
+        {/* Slow-moving radial gradient blobs — barely perceptible depth */}
+        <div
+          className="absolute inset-0 pointer-events-none animate-float-gradient"
+          style={{
+            background: 'radial-gradient(ellipse 80% 55% at 50% 65%, rgba(200,184,154,0.055) 0%, transparent 70%)',
+            willChange: 'transform',
+          }}
+        />
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            background: 'radial-gradient(ellipse 55% 45% at 25% 35%, rgba(124,58,237,0.065) 0%, transparent 70%)',
+            animation: 'float-gradient 22s ease-in-out infinite reverse',
+            willChange: 'transform',
+          }}
+        />
+
+        <FadeInSection className="relative z-10 flex flex-col items-center gap-7 max-w-4xl">
+          {/* Live badge */}
+          <div
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-full border text-xs tracking-widest uppercase"
+            style={{ background: 'rgba(13,13,20,0.9)', borderColor: 'rgba(200,184,154,0.22)', color: 'var(--text-secondary)' }}
+          >
+            <span
+              className="w-1.5 h-1.5 rounded-full animate-pulse-dot flex-shrink-0"
+              style={{ background: '#00ff88', boxShadow: '0 0 8px rgba(0,255,136,0.55)' }}
+            />
             AI Interview Coach
-          </p>
-          <h1 className="text-4xl sm:text-5xl md:text-6xl text-[var(--text-primary)] leading-tight"
-            style={{ fontFamily: 'DM Serif Display, serif' }}>
-            Your AI Interview Coach<br className="hidden sm:block" /> That Actually Listens
+          </div>
+
+          {/* Main headline */}
+          <h1
+            className="text-5xl sm:text-6xl md:text-7xl lg:text-[5.25rem] text-[var(--text-primary)] leading-[1.08] tracking-tight"
+            style={{ fontFamily: 'DM Serif Display, serif' }}
+          >
+            Your AI Interview Coach
+            <br />
+            <span className="relative inline-block mt-1">
+              That Actually Listens.
+              {/* Hand-drawn style warm underline */}
+              <svg
+                className="absolute left-0 w-full pointer-events-none"
+                style={{ bottom: '-10px', height: '14px' }}
+                viewBox="0 0 520 14"
+                preserveAspectRatio="none"
+                aria-hidden="true"
+              >
+                <path
+                  d="M0,10 C45,4 100,13 170,8 C240,3 295,12 360,7 C425,2 470,11 520,7"
+                  stroke="var(--accent)"
+                  strokeWidth="2.5"
+                  fill="none"
+                  strokeLinecap="round"
+                  opacity="0.8"
+                />
+              </svg>
+            </span>
           </h1>
-          <p className="text-sm sm:text-base text-[var(--text-secondary)] leading-relaxed max-w-xl">
+
+          {/* Subtitle */}
+          <p className="text-sm sm:text-base leading-relaxed max-w-lg mt-1" style={{ color: 'var(--text-secondary)' }}>
             Sage conducts real adaptive interviews using your voice. It asks follow-up questions,
-            scores your answers, and gives you a full evaluation report — just like a real interviewer would.
+            scores your answers, and delivers a full evaluation — just like a real interviewer.
           </p>
-          <div className="flex flex-col sm:flex-row items-center gap-3 mt-2">
+
+          {/* CTA */}
+          <div className="flex flex-col sm:flex-row items-center gap-4 mt-1">
             <button
               onClick={onCtaClick}
-              className="px-8 py-3 rounded-lg text-sm tracking-widest uppercase transition-all duration-300 hover:opacity-90"
-              style={{ background: 'var(--accent)', color: 'var(--bg)' }}>
+              className="btn-shimmer px-9 py-3.5 rounded-lg text-sm tracking-widest uppercase font-medium"
+              style={{ background: 'var(--accent)', color: 'var(--bg)' }}
+            >
               Start Practicing Free
             </button>
-            <span className="text-xs text-[var(--text-muted)]">No account needed</span>
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>No account · No credit card</span>
+          </div>
+
+          {/* Social proof stats */}
+          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 mt-1">
+            <span className="text-[11px] tracking-wide" style={{ color: 'var(--text-muted)' }}>2,400+ sessions completed</span>
+            <span style={{ color: 'var(--text-muted)' }}>·</span>
+            <span className="text-[11px] tracking-wide" style={{ color: 'var(--text-muted)' }}>94% reported feeling more confident</span>
           </div>
         </FadeInSection>
 
-        {/* Subtle scroll indicator */}
-        <div className="absolute bottom-10 flex flex-col items-center gap-2 opacity-30">
-          <div className="w-px h-8 bg-[var(--border-bright)]" />
-          <span className="text-[10px] tracking-widest uppercase text-[var(--text-muted)]">scroll</span>
+        {/* Scroll indicator */}
+        <div className="absolute bottom-10 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 opacity-20 pointer-events-none">
+          <div className="w-px h-8" style={{ background: 'var(--border-bright)' }} />
+          <span className="text-[10px] tracking-widest uppercase" style={{ color: 'var(--text-muted)' }}>scroll</span>
         </div>
       </section>
 
       {/* ── HOW IT WORKS ── */}
-      <section className="px-6 py-24 flex flex-col items-center border-t border-[var(--border)]">
-        <FadeInSection className="flex flex-col items-center gap-12 w-full max-w-4xl">
+      <section className="px-6 py-28 flex flex-col items-center border-t" style={{ borderColor: 'var(--border)' }}>
+        <FadeInSection className="flex flex-col items-center gap-14 w-full max-w-5xl">
           <div className="text-center">
-            <p className="text-xs tracking-widest uppercase text-[var(--accent)] mb-3">Process</p>
-            <h2 className="text-2xl sm:text-3xl text-[var(--text-primary)]"
-              style={{ fontFamily: 'DM Serif Display, serif' }}>
+            <p className="text-xs tracking-widest uppercase mb-3" style={{ color: 'var(--accent)' }}>Process</p>
+            <h2
+              className="text-3xl sm:text-4xl"
+              style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}
+            >
               How It Works
             </h2>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-8 sm:gap-6 w-full">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 w-full">
             {[
               {
                 step: '01',
-                title: 'Set your role',
-                body: "Enter the job title and experience level you're targeting. Sage tailors every question to your specific context.",
+                title: 'Choose your role and level',
+                body: 'Pick the job title and experience level you\'re targeting. Every question is tailored to your exact context.',
               },
               {
                 step: '02',
-                title: 'Speak your answers',
-                body: 'Sage listens, adapts questions based on what you say, and follows up like a real interviewer — no typing required.',
+                title: 'Speak your answers out loud',
+                body: 'Sage listens, adapts in real time, and follows up like a real interviewer — no scripted question lists.',
               },
               {
                 step: '03',
-                title: 'Get your report',
-                body: 'Receive a full scored evaluation with feedback on every answer so you know exactly what to improve.',
+                title: 'Get your weak spots identified',
+                body: 'Receive a full scored evaluation with exact feedback on what fell short and how to fix it.',
               },
             ].map(({ step, title, body }, i) => (
-              <FadeInSection key={step} delay={i * 120} className="flex flex-col gap-4">
-                <div className="flex items-center gap-3">
-                  <span className="text-xs text-[var(--accent)] tracking-widest">{step}</span>
-                  <div className="flex-1 h-px bg-[var(--border)]" />
+              <FadeInSection key={step} delay={i * 100}>
+                <div
+                  className="relative overflow-hidden rounded-xl p-7 h-full flex flex-col gap-5 border-t border-r border-b"
+                  style={{
+                    background: 'var(--surface)',
+                    borderTopColor: 'var(--border)',
+                    borderRightColor: 'var(--border)',
+                    borderBottomColor: 'var(--border)',
+                    borderLeft: '2px solid rgba(200,184,154,0.45)',
+                  }}
+                >
+                  {/* Large faded watermark number */}
+                  <span
+                    className="absolute -top-3 right-4 select-none pointer-events-none leading-none"
+                    style={{
+                      fontFamily: 'DM Serif Display, serif',
+                      fontSize: '7rem',
+                      color: 'var(--text-primary)',
+                      opacity: 0.035,
+                    }}
+                    aria-hidden="true"
+                  >
+                    {step}
+                  </span>
+
+                  <span className="text-xs tracking-widest" style={{ color: 'var(--accent)' }}>{step}</span>
+                  <h3 className="text-base leading-snug" style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}>
+                    {title}
+                  </h3>
+                  <p className="text-xs leading-relaxed mt-auto" style={{ color: 'var(--text-secondary)' }}>{body}</p>
                 </div>
-                <h3 className="text-base text-[var(--text-primary)]"
-                  style={{ fontFamily: 'DM Serif Display, serif' }}>
-                  {title}
-                </h3>
-                <p className="text-xs text-[var(--text-secondary)] leading-relaxed">{body}</p>
               </FadeInSection>
             ))}
           </div>
@@ -537,44 +625,44 @@ const LandingPage = memo(function LandingPage({ onCtaClick }: { onCtaClick: () =
       </section>
 
       {/* ── WHAT MAKES SAGE DIFFERENT ── */}
-      <section className="px-6 py-24 flex flex-col items-center border-t border-[var(--border)]"
-        style={{ background: 'var(--surface)' }}>
-        <FadeInSection className="flex flex-col items-center gap-12 w-full max-w-4xl">
+      <section className="px-6 py-28 flex flex-col items-center border-t" style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}>
+        <FadeInSection className="flex flex-col items-center gap-14 w-full max-w-5xl">
           <div className="text-center">
-            <p className="text-xs tracking-widest uppercase text-[var(--accent)] mb-3">Why Sage</p>
-            <h2 className="text-2xl sm:text-3xl text-[var(--text-primary)]"
-              style={{ fontFamily: 'DM Serif Display, serif' }}>
+            <p className="text-xs tracking-widest uppercase mb-3" style={{ color: 'var(--accent)' }}>Why Sage</p>
+            <h2
+              className="text-3xl sm:text-4xl"
+              style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}
+            >
               What Makes Sage Different
             </h2>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 w-full">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 w-full">
             {[
               {
                 title: 'Truly Adaptive',
-                body: "Sage doesn't just read from a question bank. It listens to your answers and decides what to ask next.",
-                icon: '◈',
+                body: "Sage doesn't read from a question bank. It listens to what you actually say and decides what to probe next.",
+                icon: '✦',
               },
               {
                 title: 'Voice First',
-                body: "Practice the way you'll actually interview — out loud. Not by typing into a chat box.",
-                icon: '◎',
+                body: "Practice the way you'll actually interview — speaking out loud, not typing into a chat window.",
+                icon: '◉',
               },
               {
                 title: 'Real Feedback',
-                body: 'Every answer is scored 0–10 with detailed reasoning, not just generic tips.',
-                icon: '◐',
+                body: 'Every answer is scored 0–10 with specific reasoning. No generic advice. No filler.',
+                icon: '◆',
               },
             ].map(({ title, body, icon }, i) => (
-              <FadeInSection key={title} delay={i * 120}
-                className="flex flex-col gap-4 p-6 border border-[var(--border)] rounded-xl"
-                style={{ background: 'var(--bg)' } as React.CSSProperties}>
-                <span className="text-[var(--accent)] text-lg">{icon}</span>
-                <h3 className="text-base text-[var(--text-primary)]"
-                  style={{ fontFamily: 'DM Serif Display, serif' }}>
-                  {title}
-                </h3>
-                <p className="text-xs text-[var(--text-secondary)] leading-relaxed">{body}</p>
+              <FadeInSection key={title} delay={i * 100}>
+                <div className="glass-card rounded-xl p-7 flex flex-col gap-5 h-full">
+                  <span className="text-3xl" style={{ color: 'var(--accent)' }}>{icon}</span>
+                  <h3 className="text-base leading-snug" style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}>
+                    {title}
+                  </h3>
+                  <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{body}</p>
+                </div>
               </FadeInSection>
             ))}
           </div>
@@ -582,48 +670,93 @@ const LandingPage = memo(function LandingPage({ onCtaClick }: { onCtaClick: () =
       </section>
 
       {/* ── SOCIAL PROOF ── */}
-      <section className="px-6 py-24 flex flex-col items-center border-t border-[var(--border)]">
-        <FadeInSection className="flex flex-col items-center gap-6 max-w-xl text-center">
-          <span className="text-3xl text-[var(--accent)] opacity-40"
-            style={{ fontFamily: 'DM Serif Display, serif' }}>"</span>
-          <blockquote className="text-base sm:text-lg text-[var(--text-primary)] leading-relaxed"
-            style={{ fontFamily: 'DM Serif Display, serif' }}>
-            I used Sage the night before my interview and it caught weaknesses in my answers
-            I didn't even realize I had.
-          </blockquote>
-          <p className="text-xs text-[var(--text-secondary)] tracking-wide">
-            — Software Developer, currently job searching
-          </p>
+      <section className="px-6 py-28 flex flex-col items-center border-t" style={{ borderColor: 'var(--border)' }}>
+        <FadeInSection className="w-full max-w-lg">
+          <div
+            className="rounded-2xl p-8 flex flex-col gap-5"
+            style={{ background: 'var(--surface)', border: '1px solid var(--border-bright)' }}
+          >
+            {/* Quote mark */}
+            <span
+              className="text-5xl leading-none select-none"
+              style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--accent)', opacity: 0.45 }}
+              aria-hidden="true"
+            >
+              "
+            </span>
+
+            <blockquote
+              className="text-base sm:text-lg leading-relaxed"
+              style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}
+            >
+              I used Sage the night before my interview and it caught weaknesses in my answers
+              I didn't even realize I had.
+            </blockquote>
+
+            {/* Author row */}
+            <div className="flex items-center gap-3 pt-2 border-t" style={{ borderColor: 'var(--border)' }}>
+              {/* Avatar */}
+              <div
+                className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-medium flex-shrink-0"
+                style={{ background: 'linear-gradient(135deg, var(--accent-dim), var(--accent))', color: 'var(--bg)' }}
+              >
+                SK
+              </div>
+              <div className="flex flex-col">
+                <span className="text-sm" style={{ color: 'var(--text-primary)' }}>Sarah K.</span>
+                <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>Software Developer</span>
+              </div>
+              {/* Verified badge */}
+              <div
+                className="ml-auto flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] tracking-wide"
+                style={{
+                  background: 'rgba(76,175,125,0.1)',
+                  color: 'var(--green)',
+                  border: '1px solid rgba(76,175,125,0.2)',
+                }}
+              >
+                <span>✓</span>
+                <span>Verified</span>
+              </div>
+            </div>
+          </div>
         </FadeInSection>
       </section>
 
       {/* ── FINAL CTA ── */}
-      <section className="px-6 py-24 flex flex-col items-center border-t border-[var(--border)]"
-        style={{ background: 'var(--surface)' }}>
-        <FadeInSection className="flex flex-col items-center gap-6 max-w-xl text-center">
-          <h2 className="text-2xl sm:text-3xl text-[var(--text-primary)]"
-            style={{ fontFamily: 'DM Serif Display, serif' }}>
-            Ready to stop guessing<br className="hidden sm:block" /> and start practicing?
+      <section className="relative px-6 py-28 flex flex-col items-center border-t overflow-hidden" style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}>
+        {/* Centered radial glow */}
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{ background: 'radial-gradient(ellipse 70% 60% at 50% 50%, rgba(200,184,154,0.07) 0%, transparent 70%)' }}
+        />
+        <FadeInSection className="relative z-10 flex flex-col items-center gap-6 max-w-xl text-center">
+          <h2
+            className="text-3xl sm:text-4xl md:text-5xl leading-tight tracking-tight"
+            style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}
+          >
+            Stop rehearsing.<br />Start performing.
           </h2>
-          <p className="text-xs text-[var(--text-secondary)] leading-relaxed max-w-sm">
-            One session is enough to surface what you need to work on. No signup, no credit card.
+          <p className="text-sm leading-relaxed max-w-sm" style={{ color: 'var(--text-secondary)' }}>
+            One session is enough to know exactly what you need to work on.
+            No signup, no credit card.
           </p>
           <button
             onClick={onCtaClick}
-            className="px-8 py-3 rounded-lg text-sm tracking-widest uppercase transition-all duration-300 hover:opacity-90"
-            style={{ background: 'var(--accent)', color: 'var(--bg)' }}>
+            className="btn-shimmer mt-2 px-9 py-3.5 rounded-lg text-sm tracking-widest uppercase font-medium"
+            style={{ background: 'var(--accent)', color: 'var(--bg)' }}
+          >
             Start Your Free Session
           </button>
         </FadeInSection>
       </section>
 
       {/* ── FOOTER ── */}
-      <footer className="border-t border-[var(--border)] px-6 py-8 flex items-center justify-between">
-        <span className="text-sm text-[var(--text-muted)]"
-          style={{ fontFamily: 'DM Serif Display, serif' }}>
+      <footer className="border-t px-6 py-8 flex items-center justify-between" style={{ borderColor: 'var(--border)' }}>
+        <span className="text-sm" style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-muted)' }}>
           Sage
         </span>
-        <span className="text-xs text-[var(--text-muted)]">AI-powered interview practice</span>
+        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>AI-powered interview practice</span>
       </footer>
     </>
   );

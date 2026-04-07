@@ -5,7 +5,7 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@300;400;500&display=swap');
 
 :root {
-  --bg: #0a0a0a;
+  --bg: #0d0d14;
   --surface: #111111;
   --border: #1f1f1f;
   --border-bright: #2e2e2e;
@@ -27,7 +27,10 @@
 }
 
 html, body {
-  background: var(--bg);
+  background-color: var(--bg);
+  /* Subtle dot-grid texture — barely visible, adds depth */
+  background-image: radial-gradient(circle, rgba(200, 184, 154, 0.055) 1px, transparent 1px);
+  background-size: 28px 28px;
   color: var(--text-primary);
   font-family: 'DM Mono', monospace;
   min-height: 100vh;
@@ -52,6 +55,8 @@ html, body {
   border-radius: 2px;
 }
 
+/* ── Keyframes ─────────────────────────────── */
+
 @keyframes fade-in {
   from { opacity: 0; }
   to   { opacity: 1; }
@@ -75,4 +80,65 @@ html, body {
 @keyframes blink {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.3; }
+}
+
+/* Hero background blobs — very slow, barely perceptible */
+@keyframes float-gradient {
+  0%, 100% { transform: translate(0, 0) scale(1);       opacity: 0.7; }
+  33%       { transform: translate(40px, -28px) scale(1.07); opacity: 0.45; }
+  66%       { transform: translate(-28px, 18px) scale(0.95); opacity: 0.8; }
+}
+
+/* Badge live dot */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1;   transform: scale(1);    box-shadow: 0 0 6px rgba(0,255,136,0.6); }
+  50%       { opacity: 0.5; transform: scale(0.7);  box-shadow: 0 0 3px rgba(0,255,136,0.2); }
+}
+
+/* CTA button light-sweep shimmer */
+@keyframes shimmer-sweep {
+  from { transform: translateX(-120%); }
+  to   { transform: translateX(300%); }
+}
+
+/* ── Component utilities ───────────────────── */
+
+/* Shimmer CTA button */
+.btn-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+.btn-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 35%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.22) 50%,
+    transparent 100%
+  );
+  transform: translateX(-120%);
+}
+.btn-shimmer:hover::after {
+  animation: shimmer-sweep 0.65s ease forwards;
+}
+
+/* Glassmorphism feature cards — no backdrop-filter (expensive GPU compositing) */
+.glass-card {
+  background: #13131f;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  transform: translateZ(0);
+  will-change: transform;
+  transition: transform 0.32s ease, box-shadow 0.32s ease, border-color 0.32s ease;
+}
+.glass-card:hover {
+  transform: translateY(-6px) translateZ(0);
+  border-color: rgba(200, 184, 154, 0.15);
+  box-shadow:
+    0 28px 56px rgba(0, 0, 0, 0.45),
+    0 0 32px rgba(200, 184, 154, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
