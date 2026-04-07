@@ -1,4 +1,4 @@
-export type AnswerQuality = 'strong' | 'medium' | 'weak';
+export type AnswerQuality = 'strong' | 'medium' | 'weak' | 'incomplete';
 
 export type InterviewType = 'behavioral' | 'technical' | 'mixed';
 

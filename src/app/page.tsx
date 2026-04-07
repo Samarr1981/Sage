@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect, memo } from 'react';
 import { useSpeech } from '@/lib/hooks/useSpeech';
 import type {
   ExaminerState,
@@ -230,11 +230,411 @@ function EvaluationScreen({ evaluation, role, onRestart }: {
   );
 }
 
+function FadeInSection({ children, className = '', delay = 0, style }: {
+  children: React.ReactNode;
+  className?: string;
+  delay?: number;
+  style?: React.CSSProperties;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) setVisible(true); },
+      { threshold: 0.12 }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return (
+    <div ref={ref} className={className} style={{
+      ...style,
+      opacity: visible ? 1 : 0,
+      transform: visible ? 'translateY(0)' : 'translateY(28px)',
+      transition: `opacity 0.7s ease ${delay}ms, transform 0.7s ease ${delay}ms`,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// INTERVIEW FORM — owns its own local state so
+// keystrokes never propagate up to Home
+// ─────────────────────────────────────────────
+const InterviewForm = memo(function InterviewForm({
+  isVisible,
+  onStart,
+  onClose,
+  unlockAudio,
+  isSupported,
+  error,
+}: {
+  isVisible: boolean;
+  onStart: (role: string, expLevel: ExperienceLevel, intType: InterviewType) => void;
+  onClose: () => void;
+  unlockAudio: () => void;
+  isSupported: boolean;
+  error: string;
+}) {
+  const roleRef = useRef('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const [roleHasValue, setRoleHasValue] = useState(false);
+  const [experienceLevel, setExperienceLevel] = useState<ExperienceLevel>('junior');
+  const [interviewType, setInterviewType] = useState<InterviewType>('behavioral');
+
+  // Focus input and reset state each time the modal opens
+  useEffect(() => {
+    if (isVisible) {
+      requestAnimationFrame(() => inputRef.current?.focus());
+    } else {
+      roleRef.current = '';
+      setRoleHasValue(false);
+      if (inputRef.current) inputRef.current.value = '';
+    }
+  }, [isVisible]);
+
+  const handleRoleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    roleRef.current = e.target.value;
+    setRoleHasValue(e.target.value.trim().length > 0);
+  };
+
+  const handleSubmit = () => {
+    const role = roleRef.current.trim();
+    if (!role) return;
+    unlockAudio();
+    onStart(role, experienceLevel, interviewType);
+  };
+
+  return (
+    // Always in the DOM — visibility toggled via CSS so there's no mount cost on click
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
+      style={{
+        opacity: isVisible ? 1 : 0,
+        pointerEvents: isVisible ? 'auto' : 'none',
+        transition: 'opacity 0.15s ease',
+      }}
+    >
+      {/* Backdrop — solid, no blur (blur is very GPU-expensive on large elements) */}
+      <div
+        className="absolute inset-0"
+        style={{ background: 'rgba(0,0,0,0.72)' }}
+        onClick={onClose}
+      />
+
+      {/* Panel */}
+      <div
+        className="relative w-full sm:max-w-md border border-[var(--border-bright)] rounded-t-2xl sm:rounded-2xl p-6 sm:p-8 z-10 flex flex-col gap-5"
+        style={{
+          background: 'var(--surface)',
+          transform: isVisible ? 'translateY(0)' : 'translateY(16px)',
+          transition: 'transform 0.15s ease',
+        }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between mb-1">
+          <div>
+            <p className="text-base text-[var(--text-primary)]"
+              style={{ fontFamily: 'DM Serif Display, serif' }}>
+              Start your session
+            </p>
+            <p className="text-xs text-[var(--text-secondary)] mt-0.5">Configure your interview below</p>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors text-lg leading-none">
+            ✕
+          </button>
+        </div>
+
+        {/* Role input — uncontrolled */}
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs text-[var(--text-secondary)] tracking-widest uppercase">
+            Role you're interviewing for
+          </label>
+          <input
+            ref={inputRef}
+            type="text"
+            defaultValue=""
+            onChange={handleRoleChange}
+            onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
+            placeholder="e.g. Software Engineer, Product Manager..."
+            className="w-full border rounded-lg px-4 py-3 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none"
+            style={{ background: 'var(--bg)', borderColor: 'var(--border)' }}
+            onFocus={e => e.currentTarget.style.borderColor = 'var(--accent)'}
+            onBlur={e => e.currentTarget.style.borderColor = 'var(--border)'}
+          />
+        </div>
+
+        {/* Experience level */}
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs text-[var(--text-secondary)] tracking-widest uppercase">
+            Experience level
+          </label>
+          <div className="grid grid-cols-3 gap-2">
+            {(['junior', 'mid-level', 'senior'] as ExperienceLevel[]).map((level) => (
+              <button key={level}
+                onClick={() => setExperienceLevel(level)}
+                className="py-2 rounded-lg text-xs tracking-widest uppercase transition-colors duration-100 border"
+                style={{
+                  borderColor: experienceLevel === level ? 'var(--accent)' : 'var(--border)',
+                  color: experienceLevel === level ? 'var(--accent)' : 'var(--text-muted)',
+                  background: experienceLevel === level ? 'var(--glow)' : 'transparent',
+                }}>
+                {level}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Interview type */}
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs text-[var(--text-secondary)] tracking-widest uppercase">
+            Interview type
+          </label>
+          <div className="grid grid-cols-3 gap-2">
+            {(['behavioral', 'technical', 'mixed'] as InterviewType[]).map((type) => (
+              <button key={type}
+                onClick={() => setInterviewType(type)}
+                className="py-2 rounded-lg text-xs tracking-widest uppercase transition-colors duration-100 border"
+                style={{
+                  borderColor: interviewType === type ? 'var(--accent)' : 'var(--border)',
+                  color: interviewType === type ? 'var(--accent)' : 'var(--text-muted)',
+                  background: interviewType === type ? 'var(--glow)' : 'transparent',
+                }}>
+                {type}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {error && <p className="text-xs text-[var(--red)]">{error}</p>}
+
+        {!isSupported && (
+          <p className="text-xs text-[var(--red)]">
+            Voice input is not available. Your browser may be too old, or try accessing the app over HTTPS.
+          </p>
+        )}
+
+        <button
+          onClick={handleSubmit}
+          disabled={!roleHasValue}
+          className="w-full py-3 rounded-lg text-sm tracking-widest uppercase transition-all duration-150"
+          style={{
+            background: roleHasValue ? 'var(--accent)' : 'var(--surface)',
+            color: roleHasValue ? 'var(--bg)' : 'var(--text-muted)',
+            opacity: roleHasValue ? '1' : '0.3',
+            cursor: roleHasValue ? 'pointer' : 'not-allowed',
+          }}>
+          Begin Interview
+        </button>
+      </div>
+    </div>
+  );
+});
+
+// ─────────────────────────────────────────────
+// LANDING PAGE — memoized so it never re-renders
+// while the form modal is open or being typed into
+// ─────────────────────────────────────────────
+const LandingPage = memo(function LandingPage({ onCtaClick }: { onCtaClick: () => void }) {
+  return (
+    <>
+      {/* NAV */}
+      <nav className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between px-6 sm:px-10 py-4 border-b border-[var(--border)]"
+        style={{ background: 'rgba(10,10,10,0.85)', backdropFilter: 'blur(12px)' }}>
+        <span className="text-xl text-[var(--text-primary)]"
+          style={{ fontFamily: 'DM Serif Display, serif' }}>
+          Sage
+        </span>
+        <button
+          onClick={onCtaClick}
+          className="text-xs tracking-widest uppercase px-4 py-2 rounded-lg border border-[var(--border-bright)] text-[var(--text-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent)] transition-all duration-300">
+          Get Started
+        </button>
+      </nav>
+
+      {/* ── HERO ── */}
+      <section className="min-h-screen flex flex-col items-center justify-center px-6 text-center pt-24 pb-20">
+        <FadeInSection className="flex flex-col items-center gap-6 max-w-2xl">
+          <p className="text-xs tracking-widest uppercase text-[var(--accent)] border border-[var(--accent)] border-opacity-30 px-3 py-1 rounded-full"
+            style={{ borderColor: 'rgba(200,184,154,0.25)' }}>
+            AI Interview Coach
+          </p>
+          <h1 className="text-4xl sm:text-5xl md:text-6xl text-[var(--text-primary)] leading-tight"
+            style={{ fontFamily: 'DM Serif Display, serif' }}>
+            Your AI Interview Coach<br className="hidden sm:block" /> That Actually Listens
+          </h1>
+          <p className="text-sm sm:text-base text-[var(--text-secondary)] leading-relaxed max-w-xl">
+            Sage conducts real adaptive interviews using your voice. It asks follow-up questions,
+            scores your answers, and gives you a full evaluation report — just like a real interviewer would.
+          </p>
+          <div className="flex flex-col sm:flex-row items-center gap-3 mt-2">
+            <button
+              onClick={onCtaClick}
+              className="px-8 py-3 rounded-lg text-sm tracking-widest uppercase transition-all duration-300 hover:opacity-90"
+              style={{ background: 'var(--accent)', color: 'var(--bg)' }}>
+              Start Practicing Free
+            </button>
+            <span className="text-xs text-[var(--text-muted)]">No account needed</span>
+          </div>
+        </FadeInSection>
+
+        {/* Subtle scroll indicator */}
+        <div className="absolute bottom-10 flex flex-col items-center gap-2 opacity-30">
+          <div className="w-px h-8 bg-[var(--border-bright)]" />
+          <span className="text-[10px] tracking-widest uppercase text-[var(--text-muted)]">scroll</span>
+        </div>
+      </section>
+
+      {/* ── HOW IT WORKS ── */}
+      <section className="px-6 py-24 flex flex-col items-center border-t border-[var(--border)]">
+        <FadeInSection className="flex flex-col items-center gap-12 w-full max-w-4xl">
+          <div className="text-center">
+            <p className="text-xs tracking-widest uppercase text-[var(--accent)] mb-3">Process</p>
+            <h2 className="text-2xl sm:text-3xl text-[var(--text-primary)]"
+              style={{ fontFamily: 'DM Serif Display, serif' }}>
+              How It Works
+            </h2>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-8 sm:gap-6 w-full">
+            {[
+              {
+                step: '01',
+                title: 'Set your role',
+                body: "Enter the job title and experience level you're targeting. Sage tailors every question to your specific context.",
+              },
+              {
+                step: '02',
+                title: 'Speak your answers',
+                body: 'Sage listens, adapts questions based on what you say, and follows up like a real interviewer — no typing required.',
+              },
+              {
+                step: '03',
+                title: 'Get your report',
+                body: 'Receive a full scored evaluation with feedback on every answer so you know exactly what to improve.',
+              },
+            ].map(({ step, title, body }, i) => (
+              <FadeInSection key={step} delay={i * 120} className="flex flex-col gap-4">
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-[var(--accent)] tracking-widest">{step}</span>
+                  <div className="flex-1 h-px bg-[var(--border)]" />
+                </div>
+                <h3 className="text-base text-[var(--text-primary)]"
+                  style={{ fontFamily: 'DM Serif Display, serif' }}>
+                  {title}
+                </h3>
+                <p className="text-xs text-[var(--text-secondary)] leading-relaxed">{body}</p>
+              </FadeInSection>
+            ))}
+          </div>
+        </FadeInSection>
+      </section>
+
+      {/* ── WHAT MAKES SAGE DIFFERENT ── */}
+      <section className="px-6 py-24 flex flex-col items-center border-t border-[var(--border)]"
+        style={{ background: 'var(--surface)' }}>
+        <FadeInSection className="flex flex-col items-center gap-12 w-full max-w-4xl">
+          <div className="text-center">
+            <p className="text-xs tracking-widest uppercase text-[var(--accent)] mb-3">Why Sage</p>
+            <h2 className="text-2xl sm:text-3xl text-[var(--text-primary)]"
+              style={{ fontFamily: 'DM Serif Display, serif' }}>
+              What Makes Sage Different
+            </h2>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 w-full">
+            {[
+              {
+                title: 'Truly Adaptive',
+                body: "Sage doesn't just read from a question bank. It listens to your answers and decides what to ask next.",
+                icon: '◈',
+              },
+              {
+                title: 'Voice First',
+                body: "Practice the way you'll actually interview — out loud. Not by typing into a chat box.",
+                icon: '◎',
+              },
+              {
+                title: 'Real Feedback',
+                body: 'Every answer is scored 0–10 with detailed reasoning, not just generic tips.',
+                icon: '◐',
+              },
+            ].map(({ title, body, icon }, i) => (
+              <FadeInSection key={title} delay={i * 120}
+                className="flex flex-col gap-4 p-6 border border-[var(--border)] rounded-xl"
+                style={{ background: 'var(--bg)' } as React.CSSProperties}>
+                <span className="text-[var(--accent)] text-lg">{icon}</span>
+                <h3 className="text-base text-[var(--text-primary)]"
+                  style={{ fontFamily: 'DM Serif Display, serif' }}>
+                  {title}
+                </h3>
+                <p className="text-xs text-[var(--text-secondary)] leading-relaxed">{body}</p>
+              </FadeInSection>
+            ))}
+          </div>
+        </FadeInSection>
+      </section>
+
+      {/* ── SOCIAL PROOF ── */}
+      <section className="px-6 py-24 flex flex-col items-center border-t border-[var(--border)]">
+        <FadeInSection className="flex flex-col items-center gap-6 max-w-xl text-center">
+          <span className="text-3xl text-[var(--accent)] opacity-40"
+            style={{ fontFamily: 'DM Serif Display, serif' }}>"</span>
+          <blockquote className="text-base sm:text-lg text-[var(--text-primary)] leading-relaxed"
+            style={{ fontFamily: 'DM Serif Display, serif' }}>
+            I used Sage the night before my interview and it caught weaknesses in my answers
+            I didn't even realize I had.
+          </blockquote>
+          <p className="text-xs text-[var(--text-secondary)] tracking-wide">
+            — Software Developer, currently job searching
+          </p>
+        </FadeInSection>
+      </section>
+
+      {/* ── FINAL CTA ── */}
+      <section className="px-6 py-24 flex flex-col items-center border-t border-[var(--border)]"
+        style={{ background: 'var(--surface)' }}>
+        <FadeInSection className="flex flex-col items-center gap-6 max-w-xl text-center">
+          <h2 className="text-2xl sm:text-3xl text-[var(--text-primary)]"
+            style={{ fontFamily: 'DM Serif Display, serif' }}>
+            Ready to stop guessing<br className="hidden sm:block" /> and start practicing?
+          </h2>
+          <p className="text-xs text-[var(--text-secondary)] leading-relaxed max-w-sm">
+            One session is enough to surface what you need to work on. No signup, no credit card.
+          </p>
+          <button
+            onClick={onCtaClick}
+            className="px-8 py-3 rounded-lg text-sm tracking-widest uppercase transition-all duration-300 hover:opacity-90"
+            style={{ background: 'var(--accent)', color: 'var(--bg)' }}>
+            Start Your Free Session
+          </button>
+        </FadeInSection>
+      </section>
+
+      {/* ── FOOTER ── */}
+      <footer className="border-t border-[var(--border)] px-6 py-8 flex items-center justify-between">
+        <span className="text-sm text-[var(--text-muted)]"
+          style={{ fontFamily: 'DM Serif Display, serif' }}>
+          Sage
+        </span>
+        <span className="text-xs text-[var(--text-muted)]">AI-powered interview practice</span>
+      </footer>
+    </>
+  );
+});
+
 // ─────────────────────────────────────────────
 // MAIN PAGE
 // ─────────────────────────────────────────────
 export default function Home() {
   const [appPhase, setAppPhase] = useState<AppPhase>('landing');
+  // role/experienceLevel/interviewType are set once at interview start, not per-keystroke
   const [role, setRole] = useState('');
   const [experienceLevel, setExperienceLevel] = useState<ExperienceLevel>('mid-level');
   const [interviewType, setInterviewType] = useState<InterviewType>('mixed');
@@ -244,8 +644,19 @@ export default function Home() {
   const [quality, setQuality] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [loadingMsg, setLoadingMsg] = useState('');
+  const [showForm, setShowForm] = useState(false);
 
   const agentStateRef = useRef<ExaminerState | null>(null);
+  const isMobile = useRef(false);
+
+  useEffect(() => {
+    isMobile.current =
+      /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ||
+      window.innerWidth < 768;
+  }, []);
+
+  const handleShowForm = useCallback(() => setShowForm(true), []);
+  const handleHideForm = useCallback(() => setShowForm(false), []);
 
   const handleTranscript = useCallback(async (text: string) => {
     if (!agentStateRef.current) return;
@@ -298,14 +709,30 @@ speakBlob(audioBlob);
 
   const handleSpeakEnd = useCallback(() => {}, []);
 
-  const { status, transcript, isSupported, silenceCountdown, speak, speakBlob, startListening, unlockAudio, cancel } = useSpeech({
+  const { status, transcript, isSupported, silenceCountdown, speechMode, isRecording, micError, speakBlob, startListening, stopListening, unlockAudio, cancel } = useSpeech({
     onTranscript: handleTranscript,
     onSpeakEnd: handleSpeakEnd,
   });
 
-  const handleStart = async () => {
-    if (!role.trim()) return;
+  // Gate mobile buttons: don't show until the first question has actually played.
+  // Without this, "Tap to Answer" flashes during the TTS fetch before question 1.
+  const [questionHasPlayed, setQuestionHasPlayed] = useState(false);
+  useEffect(() => {
+    if (appPhase === 'session' && status === 'speaking') setQuestionHasPlayed(true);
+  }, [appPhase, status]);
+
+  const handleStart = useCallback(async (
+    formRole: string,
+    formExpLevel: ExperienceLevel,
+    formIntType: InterviewType,
+  ) => {
+    // Commit form values to Home state (used by session/complete display)
+    setRole(formRole);
+    setExperienceLevel(formExpLevel);
+    setInterviewType(formIntType);
+
     setError('');
+    setShowForm(false);
     setAppPhase('loading');
     setLoadingMsg('Analyzing role requirements...');
 
@@ -313,7 +740,7 @@ speakBlob(audioBlob);
       setTimeout(() => setLoadingMsg('Building interview areas...'), 1200);
       setTimeout(() => setLoadingMsg('Preparing first question...'), 2400);
 
-      const topic = `${role.trim()} — ${interviewType} interview — ${experienceLevel} level`;
+      const topic = `${formRole} — ${formIntType} interview — ${formExpLevel} level`;
 
       const res = await fetch('/api/agent', {
         method: 'POST',
@@ -321,9 +748,9 @@ speakBlob(audioBlob);
         body: JSON.stringify({
           action: 'start',
           topic,
-          role: role.trim(),
-          experienceLevel,
-          interviewType,
+          role: formRole,
+          experienceLevel: formExpLevel,
+          interviewType: formIntType,
         }),
       });
 
@@ -336,13 +763,24 @@ speakBlob(audioBlob);
       setCurrentQuestion(data.question);
       setAppPhase('session');
 
-      speak(data.question);
+      // Fetch TTS and play as a detached background task.
+      // Keeping this outside the awaited flow means a TTS failure can never
+      // trigger the catch block and send the user back to the landing page.
+      fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: data.question }),
+      })
+        .then(r => r.blob())
+        .then(blob => speakBlob(blob))
+        .catch(err => console.error('[TTS Error - first question]', err));
 
     } catch (err: any) {
       setError(err.message || 'Failed to start. Check your API key.');
+      setShowForm(true);
       setAppPhase('landing');
     }
-  };
+  }, [speakBlob]);
 
   const handleRestart = () => {
     cancel();
@@ -355,102 +793,31 @@ speakBlob(audioBlob);
     setTopicAreas([]);
     setQuality(null);
     setError('');
+    setShowForm(false);
+    setQuestionHasPlayed(false);
     agentStateRef.current = null;
   };
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center px-6 py-12"
-      style={{ background: 'var(--bg)' }}>
+    <main className={appPhase === 'landing'
+      ? 'min-h-screen'
+      : 'min-h-screen flex flex-col items-center justify-center px-6 py-12'
+    } style={{ background: 'var(--bg)' }}>
 
-      {/* ── LANDING ── */}
+      {/* ── LANDING (marketing page) ── */}
       {appPhase === 'landing' && (
-        <div className="flex flex-col items-center gap-8 animate-fade-in w-full max-w-md">
-          <div className="text-center">
-            <h1 className="text-6xl text-[var(--text-primary)] mb-3"
-              style={{ fontFamily: 'DM Serif Display, serif' }}>
-              Sage
-            </h1>
-            <p className="text-lg text-[var(--text-secondary)]">
-              Let's get you interview ready.
-            </p>
-          </div>
-
-          <div className="w-full flex flex-col gap-4">
-            {/* Role input */}
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-[var(--text-secondary)] tracking-widest uppercase">
-                Role you're interviewing for
-              </label>
-              <input
-                type="text"
-                value={role}
-                onChange={(e) => setRole(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleStart()}
-                placeholder="e.g. Software Engineer, Product Manager..."
-                className="w-full bg-[var(--surface)] border border-[var(--border)] rounded-lg px-4 py-3 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none focus:border-[var(--accent)] transition-all duration-300"
-              />
-            </div>
-
-            {/* Experience level */}
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-[var(--text-secondary)] tracking-widest uppercase">
-                Experience level
-              </label>
-              <div className="grid grid-cols-3 gap-2">
-                {(['junior', 'mid-level', 'senior'] as ExperienceLevel[]).map((level) => (
-                  <button key={level}
-                    onClick={() => setExperienceLevel(level)}
-                    className="py-2 rounded-lg text-xs tracking-widest uppercase transition-all duration-200 border"
-                    style={{
-                      borderColor: experienceLevel === level ? 'var(--accent)' : 'var(--border)',
-                      color: experienceLevel === level ? 'var(--accent)' : 'var(--text-muted)',
-                      background: experienceLevel === level ? 'var(--glow)' : 'transparent',
-                    }}>
-                    {level}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Interview type */}
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-[var(--text-secondary)] tracking-widest uppercase">
-                Interview type
-              </label>
-              <div className="grid grid-cols-3 gap-2">
-                {(['behavioral', 'technical', 'mixed'] as InterviewType[]).map((type) => (
-                  <button key={type}
-                    onClick={() => setInterviewType(type)}
-                    className="py-2 rounded-lg text-xs tracking-widest uppercase transition-all duration-200 border"
-                    style={{
-                      borderColor: interviewType === type ? 'var(--accent)' : 'var(--border)',
-                      color: interviewType === type ? 'var(--accent)' : 'var(--text-muted)',
-                      background: interviewType === type ? 'var(--glow)' : 'transparent',
-                    }}>
-                    {type}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {error && <p className="text-xs text-[var(--red)]">{error}</p>}
-
-            <button onClick={() => { unlockAudio(); handleStart(); }} disabled={!role.trim()}
-              className="w-full py-3 rounded-lg text-sm tracking-widest uppercase transition-all duration-300 disabled:opacity-30 disabled:cursor-not-allowed mt-2"
-              style={{
-                background: role.trim() ? 'var(--accent)' : 'var(--surface)',
-                color: role.trim() ? 'var(--bg)' : 'var(--text-muted)',
-              }}>
-              Begin Interview
-            </button>
-          </div>
-
-          {!isSupported && (
-            <p className="text-xs text-[var(--red)] text-center">
-              Voice not supported. Use Chrome or Edge.
-            </p>
-          )}
-        </div>
+        <>
+          <LandingPage onCtaClick={handleShowForm} />
+          {/* Always mounted — visibility toggled with CSS to avoid mount cost on click */}
+          <InterviewForm
+            isVisible={showForm}
+            onStart={handleStart}
+            onClose={handleHideForm}
+            unlockAudio={unlockAudio}
+            isSupported={isSupported}
+            error={error}
+          />
+        </>
       )}
 
       {/* ── LOADING ── */}
@@ -526,6 +893,59 @@ speakBlob(audioBlob);
                 {silenceCountdown}
               </p>
             </div>
+          )}
+
+          {/* Mic error — shown when getUserMedia fails */}
+          {micError && (
+            <p className="text-xs text-center px-4" style={{ color: 'var(--red)' }}>
+              {micError}
+            </p>
+          )}
+
+          {/* MediaRecorder mode (phone): tap-to-start after a question has played,
+               tap-to-submit while recording. Both are direct user gestures (required by iOS). */}
+          {speechMode === 'mediaRecorder' && questionHasPlayed && status === 'idle' && (
+            <button
+              onClick={startListening}
+              className="flex items-center gap-2 px-6 py-3 rounded-full border text-sm tracking-widest uppercase"
+              style={{
+                borderColor: 'var(--green)',
+                color: 'var(--green)',
+                background: 'rgba(76,175,125,0.06)',
+              }}>
+              <span className="w-2 h-2 rounded-full bg-[var(--green)]" />
+              Tap to Answer
+            </button>
+          )}
+          {/* Only show "Done Speaking" when MediaRecorder is actually capturing —
+               not during the brief status='listening' transition after audio ends. */}
+          {speechMode === 'mediaRecorder' && isRecording && (
+            <button
+              onClick={stopListening}
+              className="flex items-center gap-2 px-6 py-3 rounded-full border text-sm tracking-widest uppercase"
+              style={{
+                borderColor: 'var(--accent)',
+                color: 'var(--accent)',
+                background: 'rgba(200,184,154,0.06)',
+              }}>
+              <span className="w-2 h-2 rounded-full bg-[var(--accent)]" />
+              Done Speaking
+            </button>
+          )}
+
+          {/* Web Speech fallback: only shown if recognition drops on mobile */}
+          {speechMode === 'webSpeech' && isMobile.current && status === 'idle' && (
+            <button
+              onClick={startListening}
+              className="flex items-center gap-2 px-6 py-3 rounded-full border text-sm tracking-widest uppercase"
+              style={{
+                borderColor: 'var(--green)',
+                color: 'var(--green)',
+                background: 'rgba(76,175,125,0.06)',
+              }}>
+              <span className="w-2 h-2 rounded-full bg-[var(--green)]" />
+              Tap to Answer
+            </button>
           )}
 
           <button onClick={handleRestart}

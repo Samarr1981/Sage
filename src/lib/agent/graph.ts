@@ -103,10 +103,34 @@ Rules:
 // ─────────────────────────────────────────────
 // STEP 3: Evaluate the student's answer
 // ─────────────────────────────────────────────
+
+// Reprompts used when an answer is too thin to score.
+const REPROMPTS = [
+  "It seems like your answer got cut off — could you try again?",
+  "Could you elaborate on that a bit more?",
+  "That was a bit brief — give me a fuller answer.",
+  "I didn't catch enough there. Can you walk me through your thinking?",
+  "Take your time and give me a complete answer.",
+];
+
+function pickReprompt(): string {
+  return REPROMPTS[Math.floor(Math.random() * REPROMPTS.length)];
+}
+
+function isAnswerTooShort(answer: string): boolean {
+  const words = answer.trim().split(/\s+/).filter(Boolean);
+  return words.length < 15;
+}
+
 export async function evaluateAnswer(
   state: ExaminerState,
   answer: string
-): Promise<{ quality: AnswerQuality; score: number; feedback: string }> {
+): Promise<{ quality: AnswerQuality; score: number; feedback: string; reprompt?: string }> {
+  // ── Fast pre-check: skip LLM entirely for obvious fragments ──
+  if (isAnswerTooShort(answer)) {
+    return { quality: 'incomplete', score: 0, feedback: '', reprompt: pickReprompt() };
+  }
+
   const llm = getLLMStrict();
   const currentArea = state.topicAreas[state.currentAreaIndex];
 
@@ -117,12 +141,23 @@ Experience level expected: ${(state as any).experienceLevel || 'mid-level'}.
 
 Be honest. Be direct. Evaluate like you are deciding whether to pass this candidate.
 
-Respond ONLY with JSON. No markdown, no explanation.
-Format: {"quality":"strong"|"medium"|"weak","score":0-10,"feedback":"1-2 sentences, direct and specific"}
+IMPORTANT — before scoring, check whether the answer is actually evaluable:
+- If the answer is a sentence fragment, cuts off mid-thought, contains no verb or substance, or is clearly noise/filler (e.g. "um", "I think maybe", "yeah basically"), do NOT score it.
+- If the answer does not contain enough information to assess the candidate's knowledge, do NOT score it.
+- In those cases, return the incomplete format below.
 
-- strong: correct, confident, shows real experience (7-10)
-- medium: partially right, missing specifics or depth (4-6)
-- weak: vague, wrong, or clearly unprepared (0-3)
+Respond ONLY with JSON. No markdown, no explanation.
+
+If the answer IS evaluable:
+{"quality":"strong"|"medium"|"weak","score":0-10,"feedback":"1-2 sentences, direct and specific"}
+
+If the answer is NOT evaluable (fragment, cut off, no substance):
+{"quality":"incomplete","score":0,"feedback":"","reprompt":"<one natural sentence asking them to try again>"}
+
+Scoring rubric (only applies to evaluable answers):
+- strong: correct, confident, shows real experience (score 7-10)
+- medium: partially right, missing specifics or depth (score 4-6)
+- weak: vague, wrong, or clearly unprepared (score 0-3)
 
 Feedback must be specific — reference what they actually said.`),
     new HumanMessage(`Question: ${state.currentQuestion}\nAnswer: ${answer}`),
@@ -130,7 +165,14 @@ Feedback must be specific — reference what they actually said.`),
 
   const raw = response.content as string;
   const cleaned = raw.replace(/```json|```/g, '').trim();
-  return JSON.parse(cleaned);
+  const parsed = JSON.parse(cleaned);
+
+  // If the LLM flagged it as incomplete but didn't supply a reprompt, add one
+  if (parsed.quality === 'incomplete' && !parsed.reprompt) {
+    parsed.reprompt = pickReprompt();
+  }
+
+  return parsed;
 }
 
 // ─────────────────────────────────────────────

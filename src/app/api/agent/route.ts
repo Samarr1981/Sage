@@ -72,6 +72,20 @@ export async function POST(req: NextRequest) {
       // Step 3: evaluate the answer
       const evaluation = await evaluateAnswer(prevState, answer.trim());
 
+      // ── Early exit: answer too incomplete to score ──
+      // Don't record the exchange, don't update scores — just re-ask.
+      if (evaluation.quality === 'incomplete') {
+        return NextResponse.json({
+          success: true,
+          state: prevState,                   // state unchanged
+          question: evaluation.reprompt,      // the gentle re-ask is the "next question"
+          quality: 'incomplete',
+          feedback: '',
+          topicAreas: prevState.topicAreas,
+          phase: 'speaking',
+        });
+      }
+
       // Save exchange to history
       const currentArea = prevState.topicAreas[prevState.currentAreaIndex];
       const newExchange: ExchangeRecord = {
