@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect, memo } from 'react';
 import { useSpeech } from '@/lib/hooks/useSpeech';
+import { useRealtimeSession } from '@/lib/hooks/useRealtimeSession';
 import type {
   ExaminerState,
   FinalEvaluation,
@@ -10,7 +11,7 @@ import type {
   ExperienceLevel,
 } from '@/lib/agent/types';
 
-type AppPhase = 'landing' | 'loading' | 'session' | 'complete';
+type AppPhase = 'landing' | 'loading' | 'session' | 'complete' | 'realtime-test';
 
 // ─────────────────────────────────────────────
 // SUBCOMPONENTS
@@ -915,6 +916,25 @@ export default function Home() {
     onSpeakEnd: handleSpeakEnd,
   });
 
+  // ── Realtime API (Stage 1 testing) ───────────
+  const realtimeSession = useRealtimeSession({
+    onResponseStart: () => {
+      console.log('[Realtime] Response started');
+    },
+    onResponseEnd: () => {
+      console.log('[Realtime] Response ended');
+    },
+    onError: (err) => {
+      console.error('[Realtime] Error:', err);
+      setError(err);
+    },
+  });
+
+  const handleStartRealtimeTest = useCallback(() => {
+    setAppPhase('realtime-test');
+    realtimeSession.connect();
+  }, [realtimeSession]);
+
   // Gate mobile buttons: don't show until the first question has actually played.
   // Without this, "Tap to Answer" flashes during the TTS fetch before question 1.
   const [questionHasPlayed, setQuestionHasPlayed] = useState(false);
@@ -1216,10 +1236,122 @@ export default function Home() {
             </button>
           )}
 
-          <button onClick={handleRestart}
-            className="text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-all duration-300 tracking-widest uppercase">
-            End Session
-          </button>
+          <div className="flex flex-col gap-3 items-center">
+            <button onClick={handleRestart}
+              className="text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-all duration-300 tracking-widest uppercase">
+              End Session
+            </button>
+
+            {/* Stage 1: Realtime API test button */}
+            <button onClick={handleStartRealtimeTest}
+              className="text-xs text-[var(--accent)] hover:text-[var(--text-primary)] transition-all duration-300 tracking-widest uppercase underline">
+              Test Realtime API (Stage 1)
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── REALTIME TEST (Stage 1) ── */}
+      {appPhase === 'realtime-test' && (
+        <div className="flex flex-col items-center gap-8 w-full max-w-md animate-fade-in">
+          <div className="text-center">
+            <p className="text-xs text-[var(--text-secondary)] tracking-widest uppercase mb-1">
+              Stage 1: Realtime API Testing
+            </p>
+            <p className="text-sm text-[var(--text-primary)]">
+              WebSocket Audio Connection
+            </p>
+          </div>
+
+          {/* Connection Status */}
+          <div className="w-full border border-[var(--border)] rounded-lg p-4 bg-[var(--surface)]">
+            <p className="text-xs text-[var(--text-secondary)] tracking-widest uppercase mb-3">
+              Connection Status
+            </p>
+            <div className="flex items-center gap-3">
+              <div className={`w-3 h-3 rounded-full ${
+                realtimeSession.status === 'connected' ? 'bg-[var(--green)]' :
+                realtimeSession.status === 'connecting' ? 'bg-[var(--yellow)] animate-pulse' :
+                realtimeSession.status === 'error' ? 'bg-[var(--red)]' :
+                'bg-[var(--text-muted)]'
+              }`} />
+              <span className="text-sm text-[var(--text-primary)] capitalize">
+                {realtimeSession.status}
+              </span>
+            </div>
+            {realtimeSession.error && (
+              <p className="text-xs text-[var(--red)] mt-2">
+                Error: {realtimeSession.error}
+              </p>
+            )}
+          </div>
+
+          {/* Connection Controls */}
+          <div className="flex flex-col gap-3 w-full">
+            {realtimeSession.status === 'disconnected' && (
+              <button
+                onClick={realtimeSession.connect}
+                className="px-6 py-3 rounded-full border text-sm tracking-widest uppercase"
+                style={{
+                  borderColor: 'var(--green)',
+                  color: 'var(--green)',
+                  background: 'rgba(76,175,125,0.06)',
+                }}>
+                Connect to Realtime API
+              </button>
+            )}
+
+            {realtimeSession.status === 'connected' && (
+              <>
+                <button
+                  onClick={realtimeSession.startAudioCapture}
+                  className="px-6 py-3 rounded-full border text-sm tracking-widest uppercase"
+                  style={{
+                    borderColor: 'var(--accent)',
+                    color: 'var(--accent)',
+                    background: 'rgba(200,184,154,0.06)',
+                  }}>
+                  Start Microphone
+                </button>
+
+                <button
+                  onClick={realtimeSession.stopAudioCapture}
+                  className="px-6 py-3 rounded-full border text-sm tracking-widest uppercase"
+                  style={{
+                    borderColor: 'var(--red)',
+                    color: 'var(--red)',
+                    background: 'rgba(220,38,38,0.06)',
+                  }}>
+                  Stop Microphone
+                </button>
+
+                <button
+                  onClick={realtimeSession.disconnect}
+                  className="px-6 py-3 rounded-full border text-sm tracking-widest uppercase"
+                  style={{
+                    borderColor: 'var(--border-bright)',
+                    color: 'var(--text-muted)',
+                  }}>
+                  Disconnect
+                </button>
+              </>
+            )}
+          </div>
+
+          <div className="w-full border-t border-[var(--border)] pt-6">
+            <p className="text-xs text-[var(--text-secondary)] mb-4 leading-relaxed">
+              This is Stage 1 testing. The WebSocket should connect to OpenAI's Realtime API,
+              stream your microphone audio, and play back the assistant's audio response.
+              No evaluation or scoring yet — just testing the bidirectional audio connection.
+            </p>
+            <button onClick={() => {
+              realtimeSession.disconnect();
+              setAppPhase('session');
+            }}
+              className="text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-all duration-300 tracking-widest uppercase">
+              Back to Session
+            </button>
+          </div>
         </div>
       )}
 
