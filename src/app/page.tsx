@@ -11,7 +11,7 @@ import type {
   ExperienceLevel,
 } from '@/lib/agent/types';
 
-type AppPhase = 'landing' | 'loading' | 'session' | 'complete' | 'realtime-test';
+type AppPhase = 'landing' | 'loading' | 'session' | 'complete';
 
 // ─────────────────────────────────────────────
 // SUBCOMPONENTS
@@ -773,12 +773,12 @@ export default function Home() {
   const [experienceLevel, setExperienceLevel] = useState<ExperienceLevel>('mid-level');
   const [interviewType, setInterviewType] = useState<InterviewType>('mixed');
   const [agentState, setAgentState] = useState<ExaminerState | null>(null);
-  const [currentQuestion, setCurrentQuestion] = useState('');
-  const [topicAreas, setTopicAreas] = useState<TopicArea[]>([]);
-  const [quality, setQuality] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [loadingMsg, setLoadingMsg] = useState('');
   const [showForm, setShowForm] = useState(false);
+  const [transcript, setTranscript] = useState('');
+  const [currentQuestion, setCurrentQuestion] = useState('');
+  const [topicAreas, setTopicAreas] = useState<any[]>([]);
 
   const agentStateRef = useRef<ExaminerState | null>(null);
   const isMobile = useRef(false);
@@ -800,9 +800,9 @@ export default function Home() {
   }, []);
   const handleHideForm = useCallback(() => setShowForm(false), []);
 
+  // Legacy handleTranscript - kept for useSpeech hook compatibility but not used in Realtime flow
   const handleTranscript = useCallback(async (text: string) => {
     if (!agentStateRef.current) return;
-    setQuality(null);
 
     const t0 = performance.now();
     console.log(`[TIMING] handleTranscript: User answer received at ${t0.toFixed(2)}ms`);
@@ -833,7 +833,6 @@ export default function Home() {
 
       agentStateRef.current = data.state;
       setAgentState(data.state);
-      setQuality(data.quality);
       setTopicAreas(data.topicAreas);
 
       if (data.phase === 'complete') {
@@ -911,36 +910,74 @@ export default function Home() {
 
   const handleSpeakEnd = useCallback(() => {}, []);
 
-  const { status, transcript, isSupported, silenceCountdown, speechMode, isRecording, micError, speakBlob, startListening, stopListening, unlockAudio, cancel } = useSpeech({
+  const { status, isSupported, silenceCountdown, speechMode, isRecording, micError, speakBlob, startListening, stopListening, unlockAudio, cancel } = useSpeech({
     onTranscript: handleTranscript,
     onSpeakEnd: handleSpeakEnd,
   });
 
-  // ── Realtime API (Stage 1 testing) ───────────
+  // ── Realtime API Session ─────────────────────
   const realtimeSession = useRealtimeSession({
+    onQuestionReceived: (question) => {
+      setCurrentQuestion(question);
+    },
+    onTranscriptUpdate: (transcript) => {
+      setTranscript(transcript);
+    },
     onResponseStart: () => {
-      console.log('[Realtime] Response started');
+      console.log('[Realtime] Sage started speaking');
     },
     onResponseEnd: () => {
-      console.log('[Realtime] Response ended');
+      console.log('[Realtime] Sage finished speaking');
     },
     onError: (err) => {
       console.error('[Realtime] Error:', err);
       setError(err);
     },
+    onInterviewComplete: () => {
+      console.log('[Realtime] Interview complete');
+      // Generate final evaluation and move to complete phase
+      handleInterviewComplete();
+    },
   });
 
-  const handleStartRealtimeTest = useCallback(() => {
-    setAppPhase('realtime-test');
-    realtimeSession.connect();
-  }, [realtimeSession]);
+  const handleInterviewComplete = useCallback(async () => {
+    // Disconnect Realtime
+    realtimeSession.disconnect();
 
-  // Gate mobile buttons: don't show until the first question has actually played.
-  // Without this, "Tap to Answer" flashes during the TTS fetch before question 1.
+    try {
+      // Generate final evaluation using accumulated exchanges
+      const res = await fetch('/api/realtime/conclude', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          exchanges: realtimeSession.exchanges,
+          role,
+          experienceLevel,
+          interviewType,
+          topicAreas: realtimeSession.topicAreas,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      // Update agent state with final evaluation
+      setAgentState({
+        ...agentStateRef.current!,
+        finalEvaluation: data.finalEvaluation,
+        overallScore: data.finalEvaluation.overallScore,
+        phase: 'complete',
+      } as ExaminerState);
+
+      setAppPhase('complete');
+    } catch (err) {
+      console.error('[handleInterviewComplete Error]', err);
+      setError('Failed to generate evaluation');
+    }
+  }, [realtimeSession, role, experienceLevel, interviewType]);
+
+  // No longer needed in Realtime flow - audio is handled automatically by WebSocket
   const [questionHasPlayed, setQuestionHasPlayed] = useState(false);
-  useEffect(() => {
-    if (appPhase === 'session' && status === 'speaking') setQuestionHasPlayed(true);
-  }, [appPhase, status]);
 
   const handleStart = useCallback(async (
     formRole: string,
@@ -961,117 +998,92 @@ export default function Home() {
     setLoadingMsg('Analyzing role requirements...');
 
     try {
-      setTimeout(() => setLoadingMsg('Building interview areas...'), 1200);
-      setTimeout(() => setLoadingMsg('Preparing first question...'), 2400);
-
-      // Warm up the agent API to eliminate cold start
-      const tWarmup = performance.now();
-      console.log(`[TIMING] handleStart: Sending warmup request at ${tWarmup.toFixed(2)}ms (+${(tWarmup-t0).toFixed(2)}ms)`);
-
-      await fetch('/api/agent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'warmup' }),
-      }).catch(() => {});
-
-      const tWarmed = performance.now();
-      console.log(`[TIMING] handleStart: Warmup complete at ${tWarmed.toFixed(2)}ms (+${(tWarmed-tWarmup).toFixed(2)}ms)`);
+      setTimeout(() => setLoadingMsg('Building interview areas...'), 800);
+      setTimeout(() => setLoadingMsg('Connecting to Sage...'), 1600);
 
       const topic = `${formRole} — ${formIntType} interview — ${formExpLevel} level`;
 
       const t1 = performance.now();
-      console.log(`[TIMING] handleStart: Starting agent fetch at ${t1.toFixed(2)}ms (+${(t1-t0).toFixed(2)}ms)`);
+      console.log(`[TIMING] handleStart: Initializing topic areas at ${t1.toFixed(2)}ms`);
 
-      const res = await fetch('/api/agent', {
+      // Initialize topic areas
+      const initRes = await fetch('/api/realtime/initialize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'start',
-          topic,
-          role: formRole,
-          experienceLevel: formExpLevel,
-          interviewType: formIntType,
-        }),
+        body: JSON.stringify({ topic }),
       });
 
-      const t2 = performance.now();
-      console.log(`[TIMING] handleStart: Agent response received at ${t2.toFixed(2)}ms (+${(t2-t1).toFixed(2)}ms)`);
+      const initData = await initRes.json();
+      if (!initRes.ok) throw new Error(initData.error);
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      const topicAreas = initData.topicAreas;
+      const t2 = performance.now();
+      console.log(`[TIMING] handleStart: Topic areas initialized at ${t2.toFixed(2)}ms (+${(t2-t1).toFixed(2)}ms)`);
+
+      // Initialize Realtime session with topic areas
+      realtimeSession.initializeInterview(topicAreas);
+      setTopicAreas(topicAreas);
+
+      // Build system prompt for Sage
+      const areasList = topicAreas.map((a: any, i: number) => `${i+1}. ${a.name}`).join('\n');
+
+      const systemPrompt = `You are Sage, a senior interviewer at a top tech company conducting a ${formIntType} interview for a ${formRole} position. The candidate's experience level is ${formExpLevel}.
+
+Your task is to assess the candidate's knowledge across these 3 areas:
+${areasList}
+
+Interview Guidelines:
+- Ask ONE question at a time and wait for the candidate to finish speaking before responding
+- Start with the first area and progress naturally through all three
+- Ask 1-2 questions per area depending on the candidate's responses
+- Strong answers: acknowledge briefly and move to the next area
+- Medium answers: ask ONE clarifying follow-up to probe deeper
+- Weak answers: ask a more foundational question to assess basics
+- Transition naturally between areas (e.g., "Let's talk about [next area]...")
+- After covering all 3 areas (approximately 4-6 questions total), conclude the interview
+
+Be conversational and human-like:
+- Short, direct questions (max 2 sentences)
+- Never start with "Can you", "Could you", "Would you mind"
+- Avoid filler words like "elaborate", "explain in detail", "walk me through"
+- Sound like a real interviewer, not a chatbot
+- No encouragement or praise - stay professional and neutral
+
+When you've covered all areas sufficiently, say: "That wraps up our interview today. Thank you for your time." This signals the end.
+
+Begin with a brief greeting and your first question about: ${topicAreas[0].name}`;
 
       const t3 = performance.now();
-      console.log(`[TIMING] handleStart: First question ready: "${data.question.substring(0, 50)}..." at ${t3.toFixed(2)}ms (+${(t3-t2).toFixed(2)}ms)`);
-      console.log(`[TIMING] handleStart: Starting TTS fetch at ${t3.toFixed(2)}ms`);
+      console.log(`[TIMING] handleStart: Connecting to Realtime API at ${t3.toFixed(2)}ms`);
 
-      agentStateRef.current = data.state;
-      setAgentState(data.state);
-      setTopicAreas(data.topicAreas);
-      setCurrentQuestion(data.question);
+      // Connect to Realtime API with system prompt
+      await realtimeSession.connect(systemPrompt);
+
+      const t4 = performance.now();
+      console.log(`[TIMING] handleStart: Realtime connected at ${t4.toFixed(2)}ms (+${(t4-t3).toFixed(2)}ms)`);
+
+      // Start audio capture
+      await realtimeSession.startAudioCapture();
+
+      const t5 = performance.now();
+      console.log(`[TIMING] handleStart: Audio capture started at ${t5.toFixed(2)}ms (+${(t5-t4).toFixed(2)}ms)`);
+
+      // Move to session phase
       setAppPhase('session');
 
-      // Start TTS fetch with streaming for faster playback
-      // Stream receives audio progressively from OpenAI, reducing latency
-      fetch('/api/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: data.question }),
-      })
-        .then(async r => {
-          const t4 = performance.now();
-          console.log(`[TIMING] handleStart: TTS stream started at ${t4.toFixed(2)}ms (+${(t4-t3).toFixed(2)}ms)`);
-
-          const reader = r.body?.getReader();
-          if (!reader) {
-            const blob = await r.blob();
-            const t5 = performance.now();
-            console.log(`[TIMING] handleStart: Complete audio (${blob.size} bytes) at ${t5.toFixed(2)}ms`);
-            if (blob) speakBlob(blob);
-            return;
-          }
-
-          // Collect all chunks - streaming from OpenAI still reduces backend latency
-          const chunks: BlobPart[] = [];
-          let receivedLength = 0;
-          let firstChunkTime: number | null = null;
-
-          while (true) {
-            const { done, value } = await reader.read();
-
-            if (value) {
-              if (!firstChunkTime) {
-                firstChunkTime = performance.now();
-                console.log(`[TIMING] handleStart: First chunk received at ${firstChunkTime.toFixed(2)}ms (+${(firstChunkTime-t4).toFixed(2)}ms)`);
-              }
-              chunks.push(value);
-              receivedLength += value.length;
-            }
-
-            if (done) {
-              const t5 = performance.now();
-              console.log(`[TIMING] handleStart: Stream complete (${receivedLength} bytes) at ${t5.toFixed(2)}ms (+${(t5-t4).toFixed(2)}ms)`);
-
-              // Create complete blob and play - speech recognition won't start until audio ends
-              const blob = new Blob(chunks, { type: 'audio/mpeg' });
-              const t6 = performance.now();
-              console.log(`[TIMING] handleStart: Blob ready (${blob.size} bytes) at ${t6.toFixed(2)}ms, calling speakBlob`);
-              speakBlob(blob);
-              break;
-            }
-          }
-        })
-        .catch(err => console.error('[TTS Error - first question]', err));
+      console.log(`[TIMING] handleStart: Total initialization time: ${(t5-t0).toFixed(2)}ms`);
 
     } catch (err: any) {
+      console.error('[handleStart Error]', err);
       setError(err.message || 'Failed to start. Check your API key.');
       setShowForm(true);
       setAppPhase('landing');
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [realtimeSession]);
 
   const handleRestart = () => {
     cancel();
+    realtimeSession.disconnect();
     setAppPhase('landing');
     setRole('');
     setExperienceLevel('mid-level');
@@ -1079,7 +1091,7 @@ export default function Home() {
     setAgentState(null);
     setCurrentQuestion('');
     setTopicAreas([]);
-    setQuality(null);
+    setTranscript('');
     setError('');
     setShowForm(false);
     setQuestionHasPlayed(false);
@@ -1133,225 +1145,41 @@ export default function Home() {
             <p className="text-sm text-[var(--text-primary)]">{role} — {experienceLevel}</p>
           </div>
 
-          {topicAreas.length > 0 && <ProgressTracker areas={topicAreas} />}
+          {realtimeSession.topicAreas.length > 0 && <ProgressTracker areas={realtimeSession.topicAreas} />}
 
           <div className="flex flex-col items-center">
-            <WaveOrb status={status} />
-            <StatusLabel status={status} />
+            <WaveOrb status={realtimeSession.isSageSpeaking ? 'speaking' : realtimeSession.currentTranscript ? 'listening' : 'idle'} />
+            <StatusLabel status={realtimeSession.isSageSpeaking ? 'speaking' : realtimeSession.currentTranscript ? 'listening' : 'idle'} />
           </div>
 
-          {currentQuestion && (
+          {realtimeSession.currentQuestion && (
             <div className="w-full border border-[var(--border)] rounded-lg p-4 bg-[var(--surface)] animate-slide-up">
               <p className="text-xs text-[var(--text-secondary)] tracking-widest uppercase mb-2">
                 Question
               </p>
               <p className="text-sm text-[var(--text-primary)] leading-relaxed">
-                {currentQuestion}
+                {realtimeSession.currentQuestion}
               </p>
             </div>
           )}
 
-          {quality && (
-            <div className="flex justify-center animate-fade-in">
-              <FeedbackBadge quality={quality} />
-            </div>
-          )}
-
-          {transcript && (
+          {realtimeSession.currentTranscript && (
             <div className="w-full animate-slide-up">
               <div className="border border-[var(--border)] rounded-lg p-4 bg-[var(--surface)]">
                 <p className="text-xs text-[var(--text-secondary)] tracking-widest uppercase mb-2">
-                  You said
+                  You're saying
                 </p>
                 <p className="text-sm text-[var(--text-primary)] leading-relaxed">
-                  "{transcript}"
+                  "{realtimeSession.currentTranscript}"
                 </p>
               </div>
             </div>
           )}
 
-          {/* Silence countdown */}
-          {status === 'listening' && silenceCountdown !== null && (
-            <div className="flex flex-col items-center gap-1 animate-fade-in">
-              <p className="text-xs text-[var(--text-secondary)] tracking-widest uppercase">
-                submitting in
-              </p>
-              <p className="text-2xl text-[var(--accent)]"
-                style={{ fontFamily: 'DM Serif Display, serif' }}>
-                {silenceCountdown}
-              </p>
-            </div>
-          )}
-
-          {/* Mic error — shown when getUserMedia fails */}
-          {micError && (
-            <p className="text-xs text-center px-4" style={{ color: 'var(--red)' }}>
-              {micError}
-            </p>
-          )}
-
-          {/* MediaRecorder mode (phone): tap-to-start after a question has played,
-               tap-to-submit while recording. Both are direct user gestures (required by iOS). */}
-          {speechMode === 'mediaRecorder' && questionHasPlayed && status === 'idle' && (
-            <button
-              onClick={startListening}
-              className="flex items-center gap-2 px-6 py-3 rounded-full border text-sm tracking-widest uppercase"
-              style={{
-                borderColor: 'var(--green)',
-                color: 'var(--green)',
-                background: 'rgba(76,175,125,0.06)',
-              }}>
-              <span className="w-2 h-2 rounded-full bg-[var(--green)]" />
-              Tap to Answer
-            </button>
-          )}
-          {/* Only show "Done Speaking" when MediaRecorder is actually capturing —
-               not during the brief status='listening' transition after audio ends. */}
-          {speechMode === 'mediaRecorder' && isRecording && (
-            <button
-              onClick={stopListening}
-              className="flex items-center gap-2 px-6 py-3 rounded-full border text-sm tracking-widest uppercase"
-              style={{
-                borderColor: 'var(--accent)',
-                color: 'var(--accent)',
-                background: 'rgba(200,184,154,0.06)',
-              }}>
-              <span className="w-2 h-2 rounded-full bg-[var(--accent)]" />
-              Done Speaking
-            </button>
-          )}
-
-          {/* Web Speech fallback: only shown if recognition drops on mobile */}
-          {speechMode === 'webSpeech' && isMobile.current && status === 'idle' && (
-            <button
-              onClick={startListening}
-              className="flex items-center gap-2 px-6 py-3 rounded-full border text-sm tracking-widest uppercase"
-              style={{
-                borderColor: 'var(--green)',
-                color: 'var(--green)',
-                background: 'rgba(76,175,125,0.06)',
-              }}>
-              <span className="w-2 h-2 rounded-full bg-[var(--green)]" />
-              Tap to Answer
-            </button>
-          )}
-
-          <div className="flex flex-col gap-3 items-center">
-            <button onClick={handleRestart}
-              className="text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-all duration-300 tracking-widest uppercase">
-              End Session
-            </button>
-
-            {/* Stage 1: Realtime API test button */}
-            <button onClick={handleStartRealtimeTest}
-              className="text-xs text-[var(--accent)] hover:text-[var(--text-primary)] transition-all duration-300 tracking-widest uppercase underline">
-              Test Realtime API (Stage 1)
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ── REALTIME TEST (Stage 1) ── */}
-      {appPhase === 'realtime-test' && (
-        <div className="flex flex-col items-center gap-8 w-full max-w-md animate-fade-in">
-          <div className="text-center">
-            <p className="text-xs text-[var(--text-secondary)] tracking-widest uppercase mb-1">
-              Stage 1: Realtime API Testing
-            </p>
-            <p className="text-sm text-[var(--text-primary)]">
-              WebSocket Audio Connection
-            </p>
-          </div>
-
-          {/* Connection Status */}
-          <div className="w-full border border-[var(--border)] rounded-lg p-4 bg-[var(--surface)]">
-            <p className="text-xs text-[var(--text-secondary)] tracking-widest uppercase mb-3">
-              Connection Status
-            </p>
-            <div className="flex items-center gap-3">
-              <div className={`w-3 h-3 rounded-full ${
-                realtimeSession.status === 'connected' ? 'bg-[var(--green)]' :
-                realtimeSession.status === 'connecting' ? 'bg-[var(--yellow)] animate-pulse' :
-                realtimeSession.status === 'error' ? 'bg-[var(--red)]' :
-                'bg-[var(--text-muted)]'
-              }`} />
-              <span className="text-sm text-[var(--text-primary)] capitalize">
-                {realtimeSession.status}
-              </span>
-            </div>
-            {realtimeSession.error && (
-              <p className="text-xs text-[var(--red)] mt-2">
-                Error: {realtimeSession.error}
-              </p>
-            )}
-          </div>
-
-          {/* Connection Controls */}
-          <div className="flex flex-col gap-3 w-full">
-            {realtimeSession.status === 'disconnected' && (
-              <button
-                onClick={realtimeSession.connect}
-                className="px-6 py-3 rounded-full border text-sm tracking-widest uppercase"
-                style={{
-                  borderColor: 'var(--green)',
-                  color: 'var(--green)',
-                  background: 'rgba(76,175,125,0.06)',
-                }}>
-                Connect to Realtime API
-              </button>
-            )}
-
-            {realtimeSession.status === 'connected' && (
-              <>
-                <button
-                  onClick={realtimeSession.startAudioCapture}
-                  className="px-6 py-3 rounded-full border text-sm tracking-widest uppercase"
-                  style={{
-                    borderColor: 'var(--accent)',
-                    color: 'var(--accent)',
-                    background: 'rgba(200,184,154,0.06)',
-                  }}>
-                  Start Microphone
-                </button>
-
-                <button
-                  onClick={realtimeSession.stopAudioCapture}
-                  className="px-6 py-3 rounded-full border text-sm tracking-widest uppercase"
-                  style={{
-                    borderColor: 'var(--red)',
-                    color: 'var(--red)',
-                    background: 'rgba(220,38,38,0.06)',
-                  }}>
-                  Stop Microphone
-                </button>
-
-                <button
-                  onClick={realtimeSession.disconnect}
-                  className="px-6 py-3 rounded-full border text-sm tracking-widest uppercase"
-                  style={{
-                    borderColor: 'var(--border-bright)',
-                    color: 'var(--text-muted)',
-                  }}>
-                  Disconnect
-                </button>
-              </>
-            )}
-          </div>
-
-          <div className="w-full border-t border-[var(--border)] pt-6">
-            <p className="text-xs text-[var(--text-secondary)] mb-4 leading-relaxed">
-              This is Stage 1 testing. The WebSocket should connect to OpenAI's Realtime API,
-              stream your microphone audio, and play back the assistant's audio response.
-              No evaluation or scoring yet — just testing the bidirectional audio connection.
-            </p>
-            <button onClick={() => {
-              realtimeSession.disconnect();
-              setAppPhase('session');
-            }}
-              className="text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-all duration-300 tracking-widest uppercase">
-              Back to Session
-            </button>
-          </div>
+          <button onClick={handleRestart}
+            className="text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-all duration-300 tracking-widest uppercase mt-4">
+            End Session
+          </button>
         </div>
       )}
 
@@ -1366,3 +1194,4 @@ export default function Home() {
     </main>
   );
 }
+

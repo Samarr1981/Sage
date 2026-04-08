@@ -1,16 +1,46 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type RealtimeStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+export type AnswerQuality = 'strong' | 'medium' | 'weak' | 'incomplete';
+
+export interface TopicArea {
+  id: string;
+  name: string;
+  covered: boolean;
+  score: number | null;
+  questionCount: number;
+}
+
+export interface ExchangeRecord {
+  areaId: string;
+  question: string;
+  answer: string;
+  quality: AnswerQuality;
+  score: number;
+  feedback: string;
+  timestamp: number;
+}
 
 interface UseRealtimeSessionOptions {
+  onQuestionReceived?: (question: string) => void;
+  onTranscriptUpdate?: (transcript: string) => void;
   onResponseStart?: () => void;
   onResponseEnd?: () => void;
   onError?: (error: string) => void;
+  onInterviewComplete?: () => void;
 }
 
 export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
   const [status, setStatus] = useState<RealtimeStatus>('disconnected');
   const [error, setError] = useState<string>('');
+  const [currentTranscript, setCurrentTranscript] = useState('');
+  const [currentQuestion, setCurrentQuestion] = useState('');
+  const [isSageSpeaking, setIsSageSpeaking] = useState(false);
+
+  // Interview state
+  const [topicAreas, setTopicAreas] = useState<TopicArea[]>([]);
+  const [exchanges, setExchanges] = useState<ExchangeRecord[]>([]);
+  const [currentAreaIndex, setCurrentAreaIndex] = useState(0);
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -20,8 +50,14 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
   const isPlayingRef = useRef(false);
   const connectionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Track conversation state
+  const conversationItemsRef = useRef<any[]>([]);
+  const currentResponseTextRef = useRef('');
+  const lastUserTranscriptRef = useRef('');
+  const isEvaluatingRef = useRef(false);
+
   // ── Connect to Realtime API ──────────────────
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (systemPrompt?: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       console.log('[Realtime] Already connected');
       return;
@@ -65,7 +101,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
       ];
 
       console.log(`[Realtime] WebSocket URL: ${wsUrl}`);
-      console.log(`[Realtime] Using subprotocols for authentication: realtime, openai-insecure-api-key.[token], openai-beta.realtime-v1`);
+      console.log(`[Realtime] Using subprotocols for authentication`);
       console.log(`[Realtime] Creating WebSocket connection...`);
 
       const ws = new WebSocket(wsUrl, protocols);
@@ -76,12 +112,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
       connectionTimeoutRef.current = setTimeout(() => {
         if (ws.readyState !== WebSocket.OPEN) {
           console.error('[Realtime] Connection timeout - WebSocket did not open within 10 seconds');
-          console.error('[Realtime] Current readyState:', ws.readyState, {
-            0: 'CONNECTING',
-            1: 'OPEN',
-            2: 'CLOSING',
-            3: 'CLOSED'
-          }[ws.readyState]);
+          console.error('[Realtime] Current readyState:', ws.readyState);
           ws.close();
           setStatus('error');
           setError('Connection timeout - check your API key and model access');
@@ -101,12 +132,11 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
 
         setStatus('connected');
 
-        // Send session update to configure audio format
-        ws.send(JSON.stringify({
+        // Send session update to configure audio format and voice
+        const sessionConfig: any = {
           type: 'session.update',
           session: {
             modalities: ['text', 'audio'],
-            instructions: 'You are a helpful assistant conducting an interview. Keep responses brief and conversational.',
             voice: 'verse',
             input_audio_format: 'pcm16',
             output_audio_format: 'pcm16',
@@ -115,10 +145,20 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
               type: 'server_vad',
               threshold: 0.5,
               prefix_padding_ms: 300,
-              silence_duration_ms: 500,
+              silence_duration_ms: 700,
             },
+            temperature: 0.8,
+            max_response_output_tokens: 4096,
           },
-        }));
+        };
+
+        // If system prompt provided, add it to the session config
+        if (systemPrompt) {
+          sessionConfig.session.instructions = systemPrompt;
+        }
+
+        ws.send(JSON.stringify(sessionConfig));
+        console.log('[Realtime] Session configured');
       };
 
       ws.onmessage = (event) => {
@@ -132,13 +172,6 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
 
       ws.onerror = (event: Event) => {
         console.error('[Realtime] WebSocket error event:', event);
-        console.error('[Realtime] Error type:', event.type);
-        console.error('[Realtime] Error target:', event.target);
-        if (event instanceof ErrorEvent) {
-          console.error('[Realtime] Error message:', event.message);
-          console.error('[Realtime] Error filename:', event.filename);
-          console.error('[Realtime] Error lineno:', event.lineno);
-        }
         setStatus('error');
         setError('Connection error - check console for details');
         options.onError?.('Connection error');
@@ -156,31 +189,10 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
           connectionTimeoutRef.current = null;
         }
 
-        let errorMessage = '';
         if (!event.wasClean) {
-          errorMessage = `Connection closed unexpectedly (code: ${event.code})`;
-          if (event.reason) {
-            errorMessage += `: ${event.reason}`;
-          }
-
-          // Common WebSocket close codes
-          const closeCodeMeanings: Record<number, string> = {
-            1000: 'Normal closure',
-            1001: 'Going away',
-            1002: 'Protocol error',
-            1003: 'Unsupported data',
-            1006: 'Abnormal closure (no close frame)',
-            1007: 'Invalid frame payload data',
-            1008: 'Policy violation',
-            1009: 'Message too big',
-            1010: 'Missing extension',
-            1011: 'Internal server error',
-            1015: 'TLS handshake failure',
-          };
-
-          const meaning = closeCodeMeanings[event.code] || 'Unknown error';
-          console.error('[Realtime]', errorMessage, '-', meaning);
-          setError(`${errorMessage} (${meaning})`);
+          const errorMessage = `Connection closed unexpectedly (code: ${event.code})${event.reason ? ': ' + event.reason : ''}`;
+          console.error('[Realtime]', errorMessage);
+          setError(errorMessage);
         }
 
         setStatus('disconnected');
@@ -199,15 +211,60 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
 
   // ── Handle incoming Realtime API messages ────
   const handleRealtimeMessage = useCallback((message: any) => {
-    console.log('[Realtime] Received:', message.type);
+    const type = message.type;
 
-    switch (message.type) {
+    switch (type) {
       case 'session.created':
-        console.log('[Realtime] Session created:', message.session);
+      case 'session.updated':
+        console.log(`[Realtime] ${type}`);
         break;
 
-      case 'session.updated':
-        console.log('[Realtime] Session updated');
+      case 'conversation.item.created':
+        console.log('[Realtime] Conversation item created:', message.item.type);
+        conversationItemsRef.current.push(message.item);
+
+        // If this is an assistant message, extract the text content
+        if (message.item.role === 'assistant' && message.item.type === 'message') {
+          const textContent = message.item.content?.find((c: any) => c.type === 'text');
+          if (textContent?.text) {
+            const questionText = textContent.text;
+            setCurrentQuestion(questionText);
+            console.log('[Realtime] Question received:', questionText);
+            options.onQuestionReceived?.(questionText);
+          }
+        }
+        break;
+
+      case 'response.created':
+        console.log('[Realtime] Response created');
+        currentResponseTextRef.current = '';
+        setIsSageSpeaking(true);
+        options.onResponseStart?.();
+        break;
+
+      case 'response.output_item.added':
+        console.log('[Realtime] Response output item added');
+        break;
+
+      case 'response.content_part.added':
+        console.log('[Realtime] Response content part added');
+        break;
+
+      case 'response.text.delta':
+        // Accumulate response text as it streams
+        if (message.delta) {
+          currentResponseTextRef.current += message.delta;
+        }
+        break;
+
+      case 'response.text.done':
+        // Final text of the response
+        if (message.text) {
+          currentResponseTextRef.current = message.text;
+          setCurrentQuestion(message.text);
+          console.log('[Realtime] Complete question text:', message.text);
+          options.onQuestionReceived?.(message.text);
+        }
         break;
 
       case 'response.audio.delta':
@@ -219,23 +276,39 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
 
       case 'response.audio.done':
         console.log('[Realtime] Audio response complete');
-        options.onResponseEnd?.();
         break;
 
       case 'response.done':
         console.log('[Realtime] Response complete');
+        setIsSageSpeaking(false);
+        options.onResponseEnd?.();
         break;
 
       case 'input_audio_buffer.speech_started':
         console.log('[Realtime] User started speaking');
+        setCurrentTranscript('');
+        lastUserTranscriptRef.current = '';
         break;
 
       case 'input_audio_buffer.speech_stopped':
         console.log('[Realtime] User stopped speaking');
+        // The transcript should already be captured from conversation.item.input_audio_transcription.completed
         break;
 
-      case 'conversation.item.created':
-        console.log('[Realtime] Conversation item created');
+      case 'conversation.item.input_audio_transcription.completed':
+        // User's speech has been transcribed
+        const transcript = message.transcript?.trim();
+        if (transcript) {
+          console.log('[Realtime] User transcript:', transcript);
+          lastUserTranscriptRef.current = transcript;
+          setCurrentTranscript(transcript);
+          options.onTranscriptUpdate?.(transcript);
+
+          // Trigger background evaluation
+          if (!isEvaluatingRef.current && currentQuestion) {
+            evaluateAnswer(transcript);
+          }
+        }
         break;
 
       case 'error':
@@ -245,12 +318,70 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
         break;
 
       default:
-        // Log other events for debugging
-        if (message.type) {
-          console.log(`[Realtime] Unhandled event: ${message.type}`);
+        // Log other events at debug level
+        if (type && !type.includes('heartbeat')) {
+          console.log(`[Realtime] Event: ${type}`);
         }
     }
-  }, [options]);
+  }, [options, currentQuestion]);
+
+  // ── Evaluate answer in background ────────────
+  const evaluateAnswer = useCallback(async (answerText: string) => {
+    if (isEvaluatingRef.current || !currentQuestion) return;
+
+    isEvaluatingRef.current = true;
+    const t0 = performance.now();
+    console.log(`[Realtime] Starting background evaluation at ${t0.toFixed(2)}ms`);
+
+    try {
+      const currentArea = topicAreas[currentAreaIndex];
+
+      const res = await fetch('/api/realtime/evaluate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question: currentQuestion,
+          answer: answerText,
+          topic: currentArea?.name || 'General',
+          areaName: currentArea?.name || 'General',
+          experienceLevel: 'mid-level', // This should come from interview config
+        }),
+      });
+
+      const evaluation = await res.json();
+
+      const t1 = performance.now();
+      console.log(`[Realtime] Evaluation complete at ${t1.toFixed(2)}ms (+${(t1-t0).toFixed(2)}ms)`);
+      console.log('[Realtime] Evaluation result:', evaluation.quality, evaluation.score);
+
+      // Store the exchange
+      if (evaluation.quality !== 'incomplete' && currentArea) {
+        const newExchange: ExchangeRecord = {
+          areaId: currentArea.id,
+          question: currentQuestion,
+          answer: answerText,
+          quality: evaluation.quality,
+          score: evaluation.score,
+          feedback: evaluation.feedback,
+          timestamp: Date.now(),
+        };
+
+        setExchanges(prev => [...prev, newExchange]);
+
+        // Update area score
+        setTopicAreas(prev => prev.map((area, idx) =>
+          idx === currentAreaIndex
+            ? { ...area, score: evaluation.score }
+            : area
+        ));
+      }
+
+    } catch (err) {
+      console.error('[Realtime] Evaluation error:', err);
+    } finally {
+      isEvaluatingRef.current = false;
+    }
+  }, [currentQuestion, topicAreas, currentAreaIndex]);
 
   // ── Play audio delta from the model ──────────
   const playAudioDelta = useCallback((base64Audio: string) => {
@@ -269,13 +400,12 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
       // Start playback if not already playing
       if (!isPlayingRef.current) {
         isPlayingRef.current = true;
-        options.onResponseStart?.();
         playAudioQueue();
       }
     } catch (err) {
       console.error('[Realtime] Failed to decode audio:', err);
     }
-  }, [options]);
+  }, []);
 
   // ── Play queued audio chunks ─────────────────
   const playAudioQueue = useCallback(async () => {
@@ -288,7 +418,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
       // Convert PCM16 to Float32 for Web Audio API
       const float32 = new Float32Array(pcm16.length);
       for (let i = 0; i < pcm16.length; i++) {
-        float32[i] = pcm16[i] / 32768.0; // Convert to -1.0 to 1.0 range
+        float32[i] = pcm16[i] / 32768.0;
       }
 
       // Create audio buffer
@@ -399,6 +529,20 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
     console.log('[Realtime] Audio capture stopped');
   }, []);
 
+  // ── Initialize interview with topic areas ────
+  const initializeInterview = useCallback((areas: TopicArea[]) => {
+    // Ensure areas have questionCount property
+    const areasWithCount = areas.map(a => ({
+      ...a,
+      questionCount: a.questionCount || 0,
+    }));
+    setTopicAreas(areasWithCount);
+    setCurrentAreaIndex(0);
+    setExchanges([]);
+    setCurrentQuestion('');
+    setCurrentTranscript('');
+  }, []);
+
   // ── Disconnect ───────────────────────────────
   const disconnect = useCallback(() => {
     stopAudioCapture();
@@ -428,9 +572,16 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
   return {
     status,
     error,
+    isSageSpeaking,
+    currentTranscript,
+    currentQuestion,
+    topicAreas,
+    exchanges,
+    currentAreaIndex,
     connect,
     disconnect,
     startAudioCapture,
     stopAudioCapture,
+    initializeInterview,
   };
 }
