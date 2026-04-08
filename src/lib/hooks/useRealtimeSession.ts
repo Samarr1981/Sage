@@ -28,6 +28,7 @@ interface UseRealtimeSessionOptions {
   onResponseEnd?: () => void;
   onError?: (error: string) => void;
   onInterviewComplete?: () => void;
+  onSessionReady?: () => void;
 }
 
 export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
@@ -36,6 +37,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
   const [currentTranscript, setCurrentTranscript] = useState('');
   const [currentQuestion, setCurrentQuestion] = useState('');
   const [isSageSpeaking, setIsSageSpeaking] = useState(false);
+  const [isUserSpeaking, setIsUserSpeaking] = useState(false);
 
   // Interview state
   const [topicAreas, setTopicAreas] = useState<TopicArea[]>([]);
@@ -53,11 +55,18 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
   // Track conversation state
   const conversationItemsRef = useRef<any[]>([]);
   const currentResponseTextRef = useRef('');
+  const currentUserTranscriptRef = useRef('');
   const lastUserTranscriptRef = useRef('');
   const isEvaluatingRef = useRef(false);
+  const sessionReadyResolveRef = useRef<(() => void) | null>(null);
+  const pendingDisconnectRef = useRef(false);
+  const exchangesRef = useRef<ExchangeRecord[]>([]);
+  const topicAreasRef = useRef<TopicArea[]>([]);
+  const handleRealtimeMessageRef = useRef<((message: any) => void) | null>(null);
+  const currentQuestionRef = useRef('');
 
   // ── Connect to Realtime API ──────────────────
-  const connect = useCallback(async (systemPrompt?: string) => {
+  const connect = useCallback(async (systemPrompt?: string): Promise<void> => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       console.log('[Realtime] Already connected');
       return;
@@ -65,6 +74,11 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
 
     setStatus('connecting');
     setError('');
+
+    // Create a promise that resolves when session is fully configured
+    const sessionReadyPromise = new Promise<void>((resolve) => {
+      sessionReadyResolveRef.current = resolve;
+    });
 
     try {
       const t0 = performance.now();
@@ -145,7 +159,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
               type: 'server_vad',
               threshold: 0.5,
               prefix_padding_ms: 300,
-              silence_duration_ms: 700,
+              silence_duration_ms: 2500, // 2.5 seconds to allow natural thinking pauses
             },
             temperature: 0.8,
             max_response_output_tokens: 4096,
@@ -164,7 +178,8 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
       ws.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
-          handleRealtimeMessage(message);
+          // Use ref to always call the latest handler
+          handleRealtimeMessageRef.current?.(message);
         } catch (err) {
           console.error('[Realtime] Failed to parse message:', err);
         }
@@ -201,11 +216,22 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
 
       wsRef.current = ws;
 
+      // Wait for session to be fully configured before resolving
+      console.log('[Realtime] Waiting for session.updated confirmation...');
+      await sessionReadyPromise;
+      console.log('[Realtime] Session fully configured and ready');
+
     } catch (err: any) {
       console.error('[Realtime] Connection failed:', err);
       setStatus('error');
       setError(err.message || 'Failed to connect');
       options.onError?.(err.message || 'Failed to connect');
+
+      // Reject the session ready promise if it's still pending
+      if (sessionReadyResolveRef.current) {
+        sessionReadyResolveRef.current();
+        sessionReadyResolveRef.current = null;
+      }
     }
   }, [options]);
 
@@ -215,8 +241,25 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
 
     switch (type) {
       case 'session.created':
-      case 'session.updated':
         console.log(`[Realtime] ${type}`);
+        break;
+
+      case 'session.updated':
+        console.log(`[Realtime] ${type} - Session fully configured`);
+        // Resolve the session ready promise
+        if (sessionReadyResolveRef.current) {
+          sessionReadyResolveRef.current();
+          sessionReadyResolveRef.current = null;
+        }
+        // Trigger the assistant to speak first (based on system instructions)
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          console.log('[Realtime] Triggering assistant to begin interview');
+          wsRef.current.send(JSON.stringify({
+            type: 'response.create',
+          }));
+        }
+        // Notify that session is ready
+        options.onSessionReady?.();
         break;
 
       case 'conversation.item.created':
@@ -238,6 +281,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
       case 'response.created':
         console.log('[Realtime] Response created');
         currentResponseTextRef.current = '';
+        setCurrentQuestion(''); // Clear previous question text
         setIsSageSpeaking(true);
         options.onResponseStart?.();
         break;
@@ -278,34 +322,151 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
         console.log('[Realtime] Audio response complete');
         break;
 
+      case 'response.audio_transcript.delta':
+        // Transcript of audio being spoken - stream it to display
+        if (message.delta) {
+          currentResponseTextRef.current += message.delta;
+          const displayText = currentResponseTextRef.current;
+          setCurrentQuestion(displayText);
+          console.log('[Realtime] Audio transcript delta:', message.delta);
+        }
+        break;
+
+      case 'response.audio_transcript.done':
+        // Final transcript of audio spoken
+        if (message.transcript) {
+          currentResponseTextRef.current = message.transcript;
+          setCurrentQuestion(message.transcript);
+
+          // Log every response to debug conclusion detection
+          console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+          console.log('[Realtime] SAGE RESPONSE:', message.transcript);
+          console.log('[Realtime] Current exchanges:', exchangesRef.current.length);
+          console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+          options.onQuestionReceived?.(message.transcript);
+
+          // Check for conclusion signals - broader pattern matching
+          const lowerTranscript = message.transcript.toLowerCase();
+          const conclusionSignals = [
+            'goodbye',
+            'take care',
+            'interview is finished',
+            'interview is complete',
+            'our interview is finished',
+            'our interview is complete',
+            'best of luck',
+            'good luck',
+            'that concludes',
+            "we're done",
+            'thank you for your time',
+            'that wraps up',
+            'thanks for your time',
+            'appreciate your time',
+            'wraps up our interview',
+          ];
+          const isConclusion = conclusionSignals.some(signal => lowerTranscript.includes(signal));
+
+          // Safety fallback: auto-conclude after 6 exchanges
+          const hasMinimumExchanges = exchangesRef.current.length >= 6;
+
+          if (isConclusion || hasMinimumExchanges) {
+            const reason = isConclusion ? 'Conclusion signal detected' : `${exchangesRef.current.length} exchanges completed (auto-conclude)`;
+            console.log(`[Realtime] 🎯 ${reason} - SCHEDULING DISCONNECT AFTER RESPONSE COMPLETES`);
+
+            // Set flag to disconnect after current response finishes
+            pendingDisconnectRef.current = true;
+
+            // Call onInterviewComplete immediately (starts the evaluation process)
+            options.onInterviewComplete?.();
+
+            // WebSocket will disconnect in response.done handler
+          } else if (isConclusion && exchanges.length < 3) {
+            console.warn('[Realtime] ⚠️ Conclusion signal detected but only', exchanges.length, 'exchanges - continuing interview');
+          }
+        }
+        break;
+
       case 'response.done':
         console.log('[Realtime] Response complete');
         setIsSageSpeaking(false);
         options.onResponseEnd?.();
+
+        // Check if we're waiting to disconnect after conclusion
+        if (pendingDisconnectRef.current) {
+          console.log('[Realtime] ✅ Response finished - now disconnecting WebSocket');
+          stopAudioCapture();
+          if (wsRef.current) {
+            wsRef.current.close();
+            wsRef.current = null;
+          }
+          setStatus('disconnected');
+          pendingDisconnectRef.current = false;
+        }
         break;
 
       case 'input_audio_buffer.speech_started':
         console.log('[Realtime] User started speaking');
+        currentUserTranscriptRef.current = '';
         setCurrentTranscript('');
-        lastUserTranscriptRef.current = '';
+        setIsUserSpeaking(true);
+        options.onTranscriptUpdate?.('');
         break;
 
       case 'input_audio_buffer.speech_stopped':
-        console.log('[Realtime] User stopped speaking');
+        console.log('[Realtime] User stopped speaking - waiting for transcription');
+        setIsUserSpeaking(false);
         // The transcript should already be captured from conversation.item.input_audio_transcription.completed
         break;
 
+      case 'input_audio_buffer.committed':
+        console.log('[Realtime] Audio buffer committed');
+        break;
+
+      case 'conversation.item.input_audio_transcription.delta':
+        // User's speech is being transcribed in real-time - stream it to display
+        if (message.delta) {
+          currentUserTranscriptRef.current += message.delta;
+          const displayTranscript = currentUserTranscriptRef.current.trim();
+          setCurrentTranscript(displayTranscript);
+          console.log('[Realtime] User transcript delta, total so far:', displayTranscript);
+        }
+        break;
+
       case 'conversation.item.input_audio_transcription.completed':
-        // User's speech has been transcribed
+        // User's speech has been transcribed completely
         const transcript = message.transcript?.trim();
         if (transcript) {
-          console.log('[Realtime] User transcript:', transcript);
+          console.log('[Realtime] User transcript complete:', transcript);
+          currentUserTranscriptRef.current = transcript;
           lastUserTranscriptRef.current = transcript;
           setCurrentTranscript(transcript);
           options.onTranscriptUpdate?.(transcript);
 
+          // Immediately create exchange record when answer completes
+          if (currentQuestionRef.current) {
+            const currentArea = topicAreasRef.current[currentAreaIndex];
+            const newExchange: ExchangeRecord = {
+              areaId: currentArea?.id || 'unknown',
+              question: currentQuestionRef.current,
+              answer: transcript,
+              quality: 'medium', // Placeholder - will be updated by evaluation
+              score: 0, // Placeholder - will be updated by evaluation
+              feedback: '', // Placeholder - will be updated by evaluation
+              timestamp: Date.now(),
+            };
+
+            setExchanges(prev => {
+              const updated = [...prev, newExchange];
+              console.log('[Realtime] Exchange added - Total exchanges:', updated.length);
+              return updated;
+            });
+
+            console.log('[Realtime] Exchange created:', newExchange);
+          }
+
           // Trigger background evaluation
-          if (!isEvaluatingRef.current && currentQuestion) {
+          if (!isEvaluatingRef.current && currentQuestionRef.current) {
             evaluateAnswer(transcript);
           }
         }
@@ -318,29 +479,29 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
         break;
 
       default:
-        // Log other events at debug level
-        if (type && !type.includes('heartbeat')) {
-          console.log(`[Realtime] Event: ${type}`);
+        // Log other events at debug level to help identify missing handlers
+        if (type && !type.includes('heartbeat') && !type.includes('rate_limits')) {
+          console.log(`[Realtime] Unhandled event: ${type}`, message);
         }
     }
-  }, [options, currentQuestion]);
+  }, [options]);
 
   // ── Evaluate answer in background ────────────
   const evaluateAnswer = useCallback(async (answerText: string) => {
-    if (isEvaluatingRef.current || !currentQuestion) return;
+    if (isEvaluatingRef.current || !currentQuestionRef.current) return;
 
     isEvaluatingRef.current = true;
     const t0 = performance.now();
     console.log(`[Realtime] Starting background evaluation at ${t0.toFixed(2)}ms`);
 
     try {
-      const currentArea = topicAreas[currentAreaIndex];
+      const currentArea = topicAreasRef.current[currentAreaIndex];
 
       const res = await fetch('/api/realtime/evaluate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          question: currentQuestion,
+          question: currentQuestionRef.current,
           answer: answerText,
           topic: currentArea?.name || 'General',
           areaName: currentArea?.name || 'General',
@@ -354,19 +515,18 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
       console.log(`[Realtime] Evaluation complete at ${t1.toFixed(2)}ms (+${(t1-t0).toFixed(2)}ms)`);
       console.log('[Realtime] Evaluation result:', evaluation.quality, evaluation.score);
 
-      // Store the exchange
+      // Update the most recent exchange with evaluation results
       if (evaluation.quality !== 'incomplete' && currentArea) {
-        const newExchange: ExchangeRecord = {
-          areaId: currentArea.id,
-          question: currentQuestion,
-          answer: answerText,
-          quality: evaluation.quality,
-          score: evaluation.score,
-          feedback: evaluation.feedback,
-          timestamp: Date.now(),
-        };
-
-        setExchanges(prev => [...prev, newExchange]);
+        setExchanges(prev => {
+          const updated = [...prev];
+          const lastExchange = updated[updated.length - 1];
+          if (lastExchange && lastExchange.answer === answerText) {
+            lastExchange.quality = evaluation.quality;
+            lastExchange.score = evaluation.score;
+            lastExchange.feedback = evaluation.feedback;
+          }
+          return updated;
+        });
 
         // Update area score
         setTopicAreas(prev => prev.map((area, idx) =>
@@ -381,7 +541,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
     } finally {
       isEvaluatingRef.current = false;
     }
-  }, [currentQuestion, topicAreas, currentAreaIndex]);
+  }, [currentAreaIndex]);
 
   // ── Play audio delta from the model ──────────
   const playAudioDelta = useCallback((base64Audio: string) => {
@@ -569,10 +729,28 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
     };
   }, [disconnect]);
 
+  // ── Keep refs in sync with state ──────────────
+  useEffect(() => {
+    exchangesRef.current = exchanges;
+  }, [exchanges]);
+
+  useEffect(() => {
+    topicAreasRef.current = topicAreas;
+  }, [topicAreas]);
+
+  useEffect(() => {
+    currentQuestionRef.current = currentQuestion;
+  }, [currentQuestion]);
+
+  useEffect(() => {
+    handleRealtimeMessageRef.current = handleRealtimeMessage;
+  }, [handleRealtimeMessage]);
+
   return {
     status,
     error,
     isSageSpeaking,
+    isUserSpeaking,
     currentTranscript,
     currentQuestion,
     topicAreas,

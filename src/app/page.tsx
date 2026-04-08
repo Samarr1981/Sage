@@ -929,6 +929,9 @@ export default function Home() {
     onResponseEnd: () => {
       console.log('[Realtime] Sage finished speaking');
     },
+    onSessionReady: () => {
+      console.log('[Realtime] Session ready - Sage should begin speaking');
+    },
     onError: (err) => {
       console.error('[Realtime] Error:', err);
       setError(err);
@@ -941,25 +944,55 @@ export default function Home() {
   });
 
   const handleInterviewComplete = useCallback(async () => {
-    // Disconnect Realtime
-    realtimeSession.disconnect();
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('[handleInterviewComplete] STARTING EVALUATION');
+    console.log('[handleInterviewComplete] Exchanges accumulated:', realtimeSession.exchanges.length);
+    console.log('[handleInterviewComplete] Exchanges:', JSON.stringify(realtimeSession.exchanges, null, 2));
+
+    // If not already disconnected (e.g., manual force end), disconnect now
+    if (realtimeSession.status !== 'disconnected') {
+      console.log('[handleInterviewComplete] Manually triggered - disconnecting WebSocket');
+      realtimeSession.disconnect();
+    }
+
+    // Safety check - ensure we have at least some exchanges to evaluate
+    if (realtimeSession.exchanges.length === 0) {
+      console.error('[handleInterviewComplete] ❌ No exchanges to evaluate');
+      setError('Interview ended prematurely - no answers recorded');
+      setAppPhase('landing');
+      return;
+    }
 
     try {
+      const requestPayload = {
+        exchanges: realtimeSession.exchanges,
+        role,
+        experienceLevel,
+        interviewType,
+        topicAreas: realtimeSession.topicAreas,
+      };
+
+      console.log('[handleInterviewComplete] 📤 Sending to /api/realtime/conclude:');
+      console.log(JSON.stringify(requestPayload, null, 2));
+
       // Generate final evaluation using accumulated exchanges
       const res = await fetch('/api/realtime/conclude', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          exchanges: realtimeSession.exchanges,
-          role,
-          experienceLevel,
-          interviewType,
-          topicAreas: realtimeSession.topicAreas,
-        }),
+        body: JSON.stringify(requestPayload),
       });
 
       const data = await res.json();
+
+      console.log('[handleInterviewComplete] 📥 Response from /api/realtime/conclude:');
+      console.log('Status:', res.status, res.ok ? '✅' : '❌');
+      console.log('Data:', JSON.stringify(data, null, 2));
+
       if (!res.ok) throw new Error(data.error);
+
+      console.log('[handleInterviewComplete] ✅ Evaluation received successfully');
+      console.log('[handleInterviewComplete] Setting agentState with finalEvaluation');
+      console.log('[handleInterviewComplete] Transitioning to phase: complete');
 
       // Update agent state with final evaluation
       setAgentState({
@@ -970,14 +1003,15 @@ export default function Home() {
       } as ExaminerState);
 
       setAppPhase('complete');
+      console.log('[handleInterviewComplete] ✅ Phase transition to complete successful');
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     } catch (err) {
-      console.error('[handleInterviewComplete Error]', err);
-      setError('Failed to generate evaluation');
+      console.error('[handleInterviewComplete Error] ❌', err);
+      setError('Failed to generate evaluation. Please try again.');
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     }
   }, [realtimeSession, role, experienceLevel, interviewType]);
 
-  // No longer needed in Realtime flow - audio is handled automatically by WebSocket
-  const [questionHasPlayed, setQuestionHasPlayed] = useState(false);
 
   const handleStart = useCallback(async (
     formRole: string,
@@ -1035,12 +1069,14 @@ ${areasList}
 Interview Guidelines:
 - Ask ONE question at a time and wait for the candidate to finish speaking before responding
 - Start with the first area and progress naturally through all three
-- Ask 1-2 questions per area depending on the candidate's responses
-- Strong answers: acknowledge briefly and move to the next area
+- MANDATORY: Ask at least 2 questions per topic area before moving to the next area
+- MANDATORY: Cover ALL 3 topic areas before concluding the interview
+- If a candidate's answer is under 15 words, it is incomplete — ask them to elaborate or provide more detail
+- Strong answers: acknowledge briefly and ask one more question in this area before moving on
 - Medium answers: ask ONE clarifying follow-up to probe deeper
 - Weak answers: ask a more foundational question to assess basics
 - Transition naturally between areas (e.g., "Let's talk about [next area]...")
-- After covering all 3 areas (approximately 4-6 questions total), conclude the interview
+- Total interview should be 6-8 questions across all 3 areas
 
 Be conversational and human-like:
 - Short, direct questions (max 2 sentences)
@@ -1049,20 +1085,26 @@ Be conversational and human-like:
 - Sound like a real interviewer, not a chatbot
 - No encouragement or praise - stay professional and neutral
 
-When you've covered all areas sufficiently, say: "That wraps up our interview today. Thank you for your time." This signals the end.
+Completion Rules (ALL must be true before concluding):
+1. You have covered ALL 3 topic areas
+2. You have asked at least 2 questions per topic area
+3. The candidate has provided substantive answers (not just 1-2 word responses)
+4. You have asked a total of at least 6 questions
 
-Begin with a brief greeting and your first question about: ${topicAreas[0].name}`;
+When ALL completion rules are met, say: "That wraps up our interview today. Thank you for your time." This signals the end.
+
+IMPORTANT: Begin the interview immediately when the session starts. Say a brief greeting like "Hi, I'm Sage. Let's get started." and then ask your first question about ${topicAreas[0].name}. Do not wait for the candidate to speak first.`;
 
       const t3 = performance.now();
       console.log(`[TIMING] handleStart: Connecting to Realtime API at ${t3.toFixed(2)}ms`);
 
-      // Connect to Realtime API with system prompt
+      // Connect to Realtime API with system prompt - this waits for session.updated
       await realtimeSession.connect(systemPrompt);
 
       const t4 = performance.now();
-      console.log(`[TIMING] handleStart: Realtime connected at ${t4.toFixed(2)}ms (+${(t4-t3).toFixed(2)}ms)`);
+      console.log(`[TIMING] handleStart: Realtime session ready at ${t4.toFixed(2)}ms (+${(t4-t3).toFixed(2)}ms)`);
 
-      // Start audio capture
+      // Now safe to start audio capture - WebSocket is fully connected and configured
       await realtimeSession.startAudioCapture();
 
       const t5 = performance.now();
@@ -1094,7 +1136,6 @@ Begin with a brief greeting and your first question about: ${topicAreas[0].name}
     setTranscript('');
     setError('');
     setShowForm(false);
-    setQuestionHasPlayed(false);
     agentStateRef.current = null;
   };
 
@@ -1148,8 +1189,18 @@ Begin with a brief greeting and your first question about: ${topicAreas[0].name}
           {realtimeSession.topicAreas.length > 0 && <ProgressTracker areas={realtimeSession.topicAreas} />}
 
           <div className="flex flex-col items-center">
-            <WaveOrb status={realtimeSession.isSageSpeaking ? 'speaking' : realtimeSession.currentTranscript ? 'listening' : 'idle'} />
-            <StatusLabel status={realtimeSession.isSageSpeaking ? 'speaking' : realtimeSession.currentTranscript ? 'listening' : 'idle'} />
+            <WaveOrb status={realtimeSession.isSageSpeaking ? 'speaking' : realtimeSession.isUserSpeaking ? 'listening' : 'idle'} />
+            <StatusLabel status={realtimeSession.isSageSpeaking ? 'speaking' : realtimeSession.isUserSpeaking ? 'listening' : 'idle'} />
+
+            {/* Silence indicator - show when user was speaking but stopped */}
+            {!realtimeSession.isSageSpeaking && !realtimeSession.isUserSpeaking && realtimeSession.currentTranscript && (
+              <div className="mt-2 flex items-center gap-2 animate-pulse">
+                <div className="w-2 h-2 rounded-full bg-[var(--yellow)]" />
+                <p className="text-xs text-[var(--yellow)] tracking-widest uppercase">
+                  Processing...
+                </p>
+              </div>
+            )}
           </div>
 
           {realtimeSession.currentQuestion && (
@@ -1176,10 +1227,17 @@ Begin with a brief greeting and your first question about: ${topicAreas[0].name}
             </div>
           )}
 
-          <button onClick={handleRestart}
-            className="text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-all duration-300 tracking-widest uppercase mt-4">
-            End Session
-          </button>
+          <div className="flex items-center gap-6 mt-4">
+            <button onClick={handleInterviewComplete}
+              className="text-xs text-[var(--yellow)] hover:text-[var(--yellow)]/80 transition-all duration-300 tracking-widest uppercase border border-[var(--yellow)]/30 px-3 py-1.5 rounded"
+              title="Testing only - manually trigger evaluation report">
+              Force End Interview
+            </button>
+            <button onClick={handleRestart}
+              className="text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-all duration-300 tracking-widest uppercase">
+              End Session
+            </button>
+          </div>
         </div>
       )}
 
