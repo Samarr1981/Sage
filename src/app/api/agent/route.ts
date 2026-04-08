@@ -10,18 +10,37 @@ import type { ExaminerState, ExchangeRecord } from '@/lib/agent/types';
 
 export async function POST(req: NextRequest) {
   try {
+    const t0 = Date.now();
+    console.log(`[TIMING] Agent API: Request received at ${t0}`);
+
     const body = await req.json();
     const { action } = body;
 
+    // ── ACTION: warmup ─────────────────────────
+    if (action === 'warmup') {
+      const t1 = Date.now();
+      console.log(`[TIMING] Agent API: Warmup complete at ${t1} (+${t1-t0}ms)`);
+      return NextResponse.json({ success: true, warmed: true });
+    }
+
     // ── ACTION: start ──────────────────────────
     if (action === 'start') {
+      const t1 = Date.now();
+      console.log(`[TIMING] Agent API: Action=start, parsed at ${t1} (+${t1-t0}ms)`);
+
       const { topic, role, experienceLevel, interviewType } = body;
       if (!topic?.trim()) {
         return NextResponse.json({ error: 'Topic is required' }, { status: 400 });
       }
 
       // Step 1: break topic into areas
+      const t2 = Date.now();
+      console.log(`[TIMING] Agent API: Calling initializeSession at ${t2} (+${t2-t1}ms)`);
+
       const topicAreas = await initializeSession(topic.trim());
+
+      const t3 = Date.now();
+      console.log(`[TIMING] Agent API: initializeSession done at ${t3} (+${t3-t2}ms)`);
 
       // Build initial state
       const state: ExaminerState = {
@@ -44,10 +63,21 @@ export async function POST(req: NextRequest) {
         overallScore: null,
         error: null,
       };
+
       // Step 2: generate first question
+      const t4 = Date.now();
+      console.log(`[TIMING] Agent API: Calling generateQuestion at ${t4} (+${t4-t3}ms)`);
+
       const question = await generateQuestion(state);
+
+      const t5 = Date.now();
+      console.log(`[TIMING] Agent API: generateQuestion done at ${t5} (+${t5-t4}ms). Question: "${question.substring(0, 50)}..."`);
+
       state.currentQuestion = question;
       state.phase = 'speaking';
+
+      const t6 = Date.now();
+      console.log(`[TIMING] Agent API: Returning response at ${t6} (total: ${t6-t0}ms)`);
 
       return NextResponse.json({
         success: true,
@@ -60,6 +90,9 @@ export async function POST(req: NextRequest) {
 
     // ── ACTION: answer ─────────────────────────
     if (action === 'answer') {
+      const t1 = Date.now();
+      console.log(`[TIMING] Agent API: Action=answer, parsed at ${t1} (+${t1-t0}ms)`);
+
       const { answer, state: prevState } = body as {
         answer: string;
         state: ExaminerState;
@@ -70,7 +103,13 @@ export async function POST(req: NextRequest) {
       }
 
       // Step 3: evaluate the answer
+      const t2 = Date.now();
+      console.log(`[TIMING] Agent API: Calling evaluateAnswer at ${t2} (+${t2-t1}ms)`);
+
       const evaluation = await evaluateAnswer(prevState, answer.trim());
+
+      const t3 = Date.now();
+      console.log(`[TIMING] Agent API: evaluateAnswer done at ${t3} (+${t3-t2}ms). Quality: ${evaluation.quality}`);
 
       // ── Early exit: answer too incomplete to score ──
       // Don't record the exchange, don't update scores — just re-ask.
@@ -114,11 +153,24 @@ export async function POST(req: NextRequest) {
       };
 
       // Step 4: decide what to do next
+      const t4 = Date.now();
+      console.log(`[TIMING] Agent API: Calling decideNextStep at ${t4} (+${t4-t3}ms)`);
+
       const decision = decideNextStep(updatedState, evaluation.quality, newExchange);
+
+      const t5 = Date.now();
+      console.log(`[TIMING] Agent API: decideNextStep done at ${t5} (+${t5-t4}ms). Action: ${decision.action}`);
 
       // Step 5: act on decision
       if (decision.action === 'conclude') {
+        const t6 = Date.now();
+        console.log(`[TIMING] Agent API: Calling concludeSession at ${t6} (+${t6-t5}ms)`);
+
         const finalEvaluation = await concludeSession(updatedState);
+
+        const t7 = Date.now();
+        console.log(`[TIMING] Agent API: concludeSession done at ${t7} (+${t7-t6}ms)`);
+
         const finalState: ExaminerState = {
           ...updatedState,
           finalEvaluation,
@@ -167,9 +219,19 @@ export async function POST(req: NextRequest) {
       }
 
       // Generate next question
+      const t6 = Date.now();
+      console.log(`[TIMING] Agent API: Calling generateQuestion at ${t6} (+${t6-t5}ms)`);
+
       const nextQuestion = await generateQuestion(nextState);
+
+      const t7 = Date.now();
+      console.log(`[TIMING] Agent API: generateQuestion done at ${t7} (+${t7-t6}ms). Question: "${nextQuestion.substring(0, 50)}..."`);
+
       nextState.currentQuestion = nextQuestion;
       nextState.phase = 'speaking';
+
+      const t8 = Date.now();
+      console.log(`[TIMING] Agent API: Returning response at ${t8} (total: ${t8-t0}ms)`);
 
       return NextResponse.json({
         success: true,

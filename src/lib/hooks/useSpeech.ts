@@ -73,6 +73,7 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
   const onTranscriptRef     = useRef(onTranscript);
   const onSpeakEndRef       = useRef(onSpeakEnd);
   const isMobileRef         = useRef(false);
+  const isSageSpeakingRef   = useRef(false); // Tracks if Sage is currently speaking - prevents speech recognition during TTS playback
 
   // Web Speech
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
@@ -209,6 +210,13 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
     recognition.maxAlternatives = 1;
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
+      // CRITICAL: Ignore all speech recognition results while Sage is speaking
+      // This prevents picking up Sage's own voice or ambient noise during TTS playback
+      if (isSageSpeakingRef.current) {
+        console.log('[useSpeech] Ignoring speech recognition result - Sage is currently speaking');
+        return;
+      }
+
       let interim = '', final = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const r = event.results[i];
@@ -227,6 +235,12 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
     };
 
     recognition.onend = () => {
+      // CRITICAL: Do not restart recognition while Sage is speaking
+      if (isSageSpeakingRef.current) {
+        console.log('[useSpeech] Recognition ended but Sage is speaking - not restarting');
+        return;
+      }
+
       // Restart as long as we're still supposed to be listening.
       // On Android this fires after every utterance (continuous:false);
       // on desktop it fires only if recognition drops unexpectedly.
@@ -255,11 +269,24 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
   // ── Shared post-audio handler ─────────────────
   const handleAudioEnded = useCallback((url: string) => {
     URL.revokeObjectURL(url);
-    setStatus('listening');
+
+    // Mark that Sage has finished speaking - this prevents speech recognition from
+    // starting prematurely while TTS is still streaming or audio is playing
+    isSageSpeakingRef.current = false;
+    console.log('[useSpeech] Audio playback ended, Sage no longer speaking');
+
     onSpeakEndRef.current();
 
-    const delay = isMobileRef.current ? 800 : 500;
+    // 300ms buffer to ensure audio has fully finished before enabling speech recognition
+    const delay = 300;
     setTimeout(() => {
+      // Double-check that Sage isn't speaking again (new question could have started)
+      if (isSageSpeakingRef.current) {
+        console.log('[useSpeech] Sage started speaking again, skipping speech recognition activation');
+        return;
+      }
+
+      setStatus('listening');
       transcriptRef.current = '';
       setTranscript('');
       clearSilenceTimer();
@@ -417,8 +444,17 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
 
   // ── speakBlob ─────────────────────────────────
   const speakBlob = useCallback((blob: Blob) => {
+    const t0 = performance.now();
+    console.log(`[TIMING] speakBlob: Called with blob size ${blob.size} bytes at ${t0.toFixed(2)}ms`);
+
+    // Set flag immediately - Sage is now speaking, speech recognition MUST be disabled
+    isSageSpeakingRef.current = true;
+    console.log('[useSpeech] Sage started speaking, speech recognition disabled');
+
     setStatus('speaking');
     isListeningRef.current = false;
+
+    // Stop any active speech recognition immediately
     try { recognitionRef.current?.abort(); } catch (_) {}
     if (mediaRecorderRef.current?.state === 'recording') {
       try { mediaRecorderRef.current.stop(); } catch (_) {}
@@ -430,19 +466,49 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
       const audio = audioRef.current || new Audio();
       audioRef.current = audio;
       audio.src = url;
+
+      audio.onloadeddata = () => {
+        const t1 = performance.now();
+        console.log(`[TIMING] speakBlob: Audio loaded at ${t1.toFixed(2)}ms (+${(t1-t0).toFixed(2)}ms from speakBlob call)`);
+      };
+
+      audio.onplay = () => {
+        const t2 = performance.now();
+        console.log(`[TIMING] speakBlob: Audio STARTED PLAYING at ${t2.toFixed(2)}ms (+${(t2-t0).toFixed(2)}ms from speakBlob call)`);
+      };
+
       audio.onended = () => handleAudioEnded(url);
-      audio.onerror = () => { URL.revokeObjectURL(url); setStatus('idle'); };
-      audio.play().catch(err => { console.error('[Audio play error]', err); setStatus('idle'); });
+      audio.onerror = () => {
+        isSageSpeakingRef.current = false; // Clear flag on error
+        URL.revokeObjectURL(url);
+        setStatus('idle');
+      };
+
+      const t3 = performance.now();
+      console.log(`[TIMING] speakBlob: Calling audio.play() at ${t3.toFixed(2)}ms (+${(t3-t0).toFixed(2)}ms)`);
+
+      audio.play().catch(err => {
+        console.error('[Audio play error]', err);
+        isSageSpeakingRef.current = false; // Clear flag on error
+        setStatus('idle');
+      });
     } catch (err) {
       console.error('[speakBlob Error]', err);
+      isSageSpeakingRef.current = false; // Clear flag on error
       setStatus('idle');
     }
   }, [handleAudioEnded, stopAnalysis]);
 
   // ── speak (TTS API) ───────────────────────────
   const speak = useCallback(async (text: string) => {
+    // Set flag immediately - Sage is now speaking, speech recognition MUST be disabled
+    isSageSpeakingRef.current = true;
+    console.log('[useSpeech] Sage started speaking (TTS API), speech recognition disabled');
+
     setStatus('speaking');
     isListeningRef.current = false;
+
+    // Stop any active speech recognition immediately
     try { recognitionRef.current?.abort(); } catch (_) {}
     if (mediaRecorderRef.current?.state === 'recording') {
       try { mediaRecorderRef.current.stop(); } catch (_) {}
@@ -462,16 +528,27 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
       audioRef.current = audio;
       audio.src = url;
       audio.onended = () => handleAudioEnded(url);
-      audio.onerror = () => { URL.revokeObjectURL(url); setStatus('idle'); };
+      audio.onerror = () => {
+        isSageSpeakingRef.current = false; // Clear flag on error
+        URL.revokeObjectURL(url);
+        setStatus('idle');
+      };
       await audio.play();
     } catch (err) {
       console.error('[TTS Error]', err);
+      isSageSpeakingRef.current = false; // Clear flag on error
       setStatus('idle');
     }
   }, [handleAudioEnded, stopAnalysis]);
 
   // ── startListening (public) ───────────────────
   const startListening = useCallback(() => {
+    // CRITICAL: Do not start listening while Sage is speaking
+    if (isSageSpeakingRef.current) {
+      console.log('[useSpeech] Cannot start listening - Sage is currently speaking');
+      return;
+    }
+
     transcriptRef.current = '';
     setTranscript('');
     setStatus('listening');
@@ -519,6 +596,7 @@ export function useSpeech({ onTranscript, onSpeakEnd }: UseSpeechOptions) {
   // ── Cancel everything ─────────────────────────
   const cancel = useCallback(() => {
     isListeningRef.current = false;
+    isSageSpeakingRef.current = false; // Clear speaking flag
     setIsRecording(false);
     clearSilenceTimer();
     stopAnalysis();

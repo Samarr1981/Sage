@@ -10,7 +10,7 @@ import type {
 
 function getLLM() {
   return new ChatOpenAI({
-    model: 'gpt-4o',
+    model: 'gpt-4o-mini',
     temperature: 0.7,
     apiKey: process.env.OPENAI_API_KEY,
   });
@@ -18,7 +18,7 @@ function getLLM() {
 
 function getLLMStrict() {
   return new ChatOpenAI({
-    model: 'gpt-4o',
+    model: 'gpt-4o-mini',
     temperature: 0.1,
     apiKey: process.env.OPENAI_API_KEY,
   });
@@ -28,7 +28,13 @@ function getLLMStrict() {
 // STEP 1: Initialize — break topic into 3 areas
 // ─────────────────────────────────────────────
 export async function initializeSession(topic: string): Promise<TopicArea[]> {
+  const t0 = Date.now();
+  console.log(`[TIMING] initializeSession: Starting at ${t0}`);
+
   const llm = getLLM();
+
+  const t1 = Date.now();
+  console.log(`[TIMING] initializeSession: Calling LLM at ${t1} (+${t1-t0}ms)`);
 
   const response = await llm.invoke([
     new SystemMessage(`You are an expert curriculum designer.
@@ -38,23 +44,34 @@ Format: [{"id":"1","name":"Area Name"},{"id":"2","name":"Area Name"},{"id":"3","
     new HumanMessage(`Topic: ${topic}`),
   ]);
 
+  const t2 = Date.now();
+  console.log(`[TIMING] initializeSession: LLM response received at ${t2} (+${t2-t1}ms)`);
+
   const raw = response.content as string;
   const cleaned = raw.replace(/```json|```/g, '').trim();
   const parsed = JSON.parse(cleaned);
 
-  return parsed.map((a: { id: string; name: string }) => ({
+  const result = parsed.map((a: { id: string; name: string }) => ({
     id: a.id,
     name: a.name,
     covered: false,
     score: null,
     questionCount: 0,
   }));
+
+  const t3 = Date.now();
+  console.log(`[TIMING] initializeSession: Done at ${t3} (total: ${t3-t0}ms)`);
+
+  return result;
 }
 
 // ─────────────────────────────────────────────
 // STEP 2: Generate a question for current area
 // ─────────────────────────────────────────────
 export async function generateQuestion(state: ExaminerState): Promise<string> {
+  const t0 = Date.now();
+  console.log(`[TIMING] generateQuestion: Starting at ${t0}`);
+
   const llm = getLLM();
   const currentArea = state.topicAreas[state.currentAreaIndex];
   const areaExchanges = state.exchanges.filter(e => e.areaId === currentArea.id);
@@ -75,6 +92,9 @@ export async function generateQuestion(state: ExaminerState): Promise<string> {
   } else {
     instruction = `Ask an opening assessment question for this area. Make it thought-provoking but clear.`;
   }
+
+  const t1 = Date.now();
+  console.log(`[TIMING] generateQuestion: Calling LLM at ${t1} (+${t1-t0}ms)`);
 
   const response = await llm.invoke([
     new SystemMessage(`You are Sage, a senior interviewer at a top tech company conducting a ${state.topic} interview.
@@ -97,7 +117,15 @@ Rules:
     new HumanMessage(instruction),
   ]);
 
-  return (response.content as string).trim();
+  const t2 = Date.now();
+  console.log(`[TIMING] generateQuestion: LLM response received at ${t2} (+${t2-t1}ms)`);
+
+  const result = (response.content as string).trim();
+
+  const t3 = Date.now();
+  console.log(`[TIMING] generateQuestion: Done at ${t3} (total: ${t3-t0}ms)`);
+
+  return result;
 }
 
 // ─────────────────────────────────────────────
@@ -126,13 +154,21 @@ export async function evaluateAnswer(
   state: ExaminerState,
   answer: string
 ): Promise<{ quality: AnswerQuality; score: number; feedback: string; reprompt?: string }> {
+  const t0 = Date.now();
+  console.log(`[TIMING] evaluateAnswer: Starting at ${t0}`);
+
   // ── Fast pre-check: skip LLM entirely for obvious fragments ──
   if (isAnswerTooShort(answer)) {
+    const t1 = Date.now();
+    console.log(`[TIMING] evaluateAnswer: Answer too short, skipping LLM at ${t1} (+${t1-t0}ms)`);
     return { quality: 'incomplete', score: 0, feedback: '', reprompt: pickReprompt() };
   }
 
   const llm = getLLMStrict();
   const currentArea = state.topicAreas[state.currentAreaIndex];
+
+  const t1 = Date.now();
+  console.log(`[TIMING] evaluateAnswer: Calling LLM at ${t1} (+${t1-t0}ms)`);
 
   const response = await llm.invoke([
     new SystemMessage(`You are a senior interviewer evaluating a candidate for: "${state.topic}".
@@ -163,6 +199,9 @@ Feedback must be specific — reference what they actually said.`),
     new HumanMessage(`Question: ${state.currentQuestion}\nAnswer: ${answer}`),
   ]);
 
+  const t2 = Date.now();
+  console.log(`[TIMING] evaluateAnswer: LLM response received at ${t2} (+${t2-t1}ms)`);
+
   const raw = response.content as string;
   const cleaned = raw.replace(/```json|```/g, '').trim();
   const parsed = JSON.parse(cleaned);
@@ -171,6 +210,9 @@ Feedback must be specific — reference what they actually said.`),
   if (parsed.quality === 'incomplete' && !parsed.reprompt) {
     parsed.reprompt = pickReprompt();
   }
+
+  const t3 = Date.now();
+  console.log(`[TIMING] evaluateAnswer: Done at ${t3} (total: ${t3-t0}ms)`);
 
   return parsed;
 }
@@ -214,6 +256,9 @@ export function decideNextStep(
 // STEP 5: Generate final evaluation
 // ─────────────────────────────────────────────
 export async function concludeSession(state: ExaminerState): Promise<FinalEvaluation> {
+  const t0 = Date.now();
+  console.log(`[TIMING] concludeSession: Starting at ${t0}`);
+
   const llm = getLLM();
 
   const exchangeSummary = state.exchanges
@@ -222,6 +267,9 @@ export async function concludeSession(state: ExaminerState): Promise<FinalEvalua
       return `Area: ${area?.name}\nQ: ${e.question}\nA: ${e.answer}\nQuality: ${e.quality}`;
     })
     .join('\n\n');
+
+  const t1 = Date.now();
+  console.log(`[TIMING] concludeSession: Calling LLM at ${t1} (+${t1-t0}ms)`);
 
   const response = await llm.invoke([
     new SystemMessage(`You are a senior interviewer completing a ${state.interviewType} interview assessment.
@@ -252,7 +300,15 @@ Format:
     new HumanMessage(`Assessment exchanges:\n\n${exchangeSummary}`),
   ]);
 
+  const t2 = Date.now();
+  console.log(`[TIMING] concludeSession: LLM response received at ${t2} (+${t2-t1}ms)`);
+
   const raw = response.content as string;
   const cleaned = raw.replace(/```json|```/g, '').trim();
-  return JSON.parse(cleaned);
+  const result = JSON.parse(cleaned);
+
+  const t3 = Date.now();
+  console.log(`[TIMING] concludeSession: Done at ${t3} (total: ${t3-t0}ms)`);
+
+  return result;
 }

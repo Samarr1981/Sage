@@ -788,15 +788,29 @@ export default function Home() {
       window.innerWidth < 768;
   }, []);
 
-  const handleShowForm = useCallback(() => setShowForm(true), []);
+  const handleShowForm = useCallback(() => {
+    setShowForm(true);
+    // Warm up TTS pipeline with a silent call to eliminate first-question cold start
+    fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: '.' }),
+    }).catch(() => {}); // Ignore errors - this is just a warmup
+  }, []);
   const handleHideForm = useCallback(() => setShowForm(false), []);
 
   const handleTranscript = useCallback(async (text: string) => {
     if (!agentStateRef.current) return;
     setQuality(null);
 
+    const t0 = performance.now();
+    console.log(`[TIMING] handleTranscript: User answer received at ${t0.toFixed(2)}ms`);
+
     try {
       // Step 1 — evaluate and get next question from agent
+      const t1 = performance.now();
+      console.log(`[TIMING] handleTranscript: Starting agent fetch at ${t1.toFixed(2)}ms (+${(t1-t0).toFixed(2)}ms)`);
+
       const res = await fetch('/api/agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -807,8 +821,14 @@ export default function Home() {
         }),
       });
 
+      const t2 = performance.now();
+      console.log(`[TIMING] handleTranscript: Agent response received at ${t2.toFixed(2)}ms (+${(t2-t1).toFixed(2)}ms)`);
+
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
+
+      const t3 = performance.now();
+      console.log(`[TIMING] handleTranscript: Agent JSON parsed at ${t3.toFixed(2)}ms (+${(t3-t2).toFixed(2)}ms)`);
 
       agentStateRef.current = data.state;
       setAgentState(data.state);
@@ -821,23 +841,71 @@ export default function Home() {
         return;
       }
 
-      // Step 2 — prefetch audio and show question at the same time
+      // Step 2 — show question immediately, fetch and play audio in parallel
       const nextQuestion = data.question;
+      setCurrentQuestion(nextQuestion);
 
-      const audioRes = await fetch('/api/tts', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ text: nextQuestion }),
-});
+      const t4 = performance.now();
+      console.log(`[TIMING] handleTranscript: Question text ready: "${nextQuestion.substring(0, 50)}..." at ${t4.toFixed(2)}ms (+${(t4-t3).toFixed(2)}ms)`);
+      console.log(`[TIMING] handleTranscript: Starting TTS fetch at ${t4.toFixed(2)}ms`);
 
-const audioBlob = await audioRes.blob();
-setCurrentQuestion(nextQuestion);
-speakBlob(audioBlob);
+      // Fire TTS fetch and playback asynchronously with streaming
+      // Stream receives audio progressively from OpenAI, reducing latency
+      fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: nextQuestion }),
+      })
+        .then(async r => {
+          const t5 = performance.now();
+          console.log(`[TIMING] handleTranscript: TTS stream started at ${t5.toFixed(2)}ms (+${(t5-t4).toFixed(2)}ms)`);
+
+          const reader = r.body?.getReader();
+          if (!reader) {
+            const blob = await r.blob();
+            const t6 = performance.now();
+            console.log(`[TIMING] handleTranscript: Complete audio (${blob.size} bytes) at ${t6.toFixed(2)}ms`);
+            speakBlob(blob);
+            return;
+          }
+
+          // Collect all chunks - streaming from OpenAI still reduces backend latency
+          const chunks: BlobPart[] = [];
+          let receivedLength = 0;
+          let firstChunkTime: number | null = null;
+
+          while (true) {
+            const { done, value } = await reader.read();
+
+            if (value) {
+              if (!firstChunkTime) {
+                firstChunkTime = performance.now();
+                console.log(`[TIMING] handleTranscript: First chunk received at ${firstChunkTime.toFixed(2)}ms (+${(firstChunkTime-t5).toFixed(2)}ms)`);
+              }
+              chunks.push(value);
+              receivedLength += value.length;
+            }
+
+            if (done) {
+              const t6 = performance.now();
+              console.log(`[TIMING] handleTranscript: Stream complete (${receivedLength} bytes) at ${t6.toFixed(2)}ms (+${(t6-t5).toFixed(2)}ms)`);
+
+              // Create complete blob and play - speech recognition won't start until audio ends
+              const blob = new Blob(chunks, { type: 'audio/mpeg' });
+              const t7 = performance.now();
+              console.log(`[TIMING] handleTranscript: Blob ready (${blob.size} bytes) at ${t7.toFixed(2)}ms, calling speakBlob`);
+              speakBlob(blob);
+              break;
+            }
+          }
+        })
+        .catch(err => console.error('[TTS Error]', err));
 
     } catch (err) {
       console.error(err);
       setError('Something went wrong. Please try again.');
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSpeakEnd = useCallback(() => {}, []);
@@ -859,6 +927,9 @@ speakBlob(audioBlob);
     formExpLevel: ExperienceLevel,
     formIntType: InterviewType,
   ) => {
+    const t0 = performance.now();
+    console.log(`[TIMING] handleStart: Begin Interview clicked at ${t0.toFixed(2)}ms`);
+
     // Commit form values to Home state (used by session/complete display)
     setRole(formRole);
     setExperienceLevel(formExpLevel);
@@ -873,7 +944,23 @@ speakBlob(audioBlob);
       setTimeout(() => setLoadingMsg('Building interview areas...'), 1200);
       setTimeout(() => setLoadingMsg('Preparing first question...'), 2400);
 
+      // Warm up the agent API to eliminate cold start
+      const tWarmup = performance.now();
+      console.log(`[TIMING] handleStart: Sending warmup request at ${tWarmup.toFixed(2)}ms (+${(tWarmup-t0).toFixed(2)}ms)`);
+
+      await fetch('/api/agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'warmup' }),
+      }).catch(() => {});
+
+      const tWarmed = performance.now();
+      console.log(`[TIMING] handleStart: Warmup complete at ${tWarmed.toFixed(2)}ms (+${(tWarmed-tWarmup).toFixed(2)}ms)`);
+
       const topic = `${formRole} — ${formIntType} interview — ${formExpLevel} level`;
+
+      const t1 = performance.now();
+      console.log(`[TIMING] handleStart: Starting agent fetch at ${t1.toFixed(2)}ms (+${(t1-t0).toFixed(2)}ms)`);
 
       const res = await fetch('/api/agent', {
         method: 'POST',
@@ -887,8 +974,15 @@ speakBlob(audioBlob);
         }),
       });
 
+      const t2 = performance.now();
+      console.log(`[TIMING] handleStart: Agent response received at ${t2.toFixed(2)}ms (+${(t2-t1).toFixed(2)}ms)`);
+
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
+
+      const t3 = performance.now();
+      console.log(`[TIMING] handleStart: First question ready: "${data.question.substring(0, 50)}..." at ${t3.toFixed(2)}ms (+${(t3-t2).toFixed(2)}ms)`);
+      console.log(`[TIMING] handleStart: Starting TTS fetch at ${t3.toFixed(2)}ms`);
 
       agentStateRef.current = data.state;
       setAgentState(data.state);
@@ -896,16 +990,56 @@ speakBlob(audioBlob);
       setCurrentQuestion(data.question);
       setAppPhase('session');
 
-      // Fetch TTS and play as a detached background task.
-      // Keeping this outside the awaited flow means a TTS failure can never
-      // trigger the catch block and send the user back to the landing page.
+      // Start TTS fetch with streaming for faster playback
+      // Stream receives audio progressively from OpenAI, reducing latency
       fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: data.question }),
       })
-        .then(r => r.blob())
-        .then(blob => speakBlob(blob))
+        .then(async r => {
+          const t4 = performance.now();
+          console.log(`[TIMING] handleStart: TTS stream started at ${t4.toFixed(2)}ms (+${(t4-t3).toFixed(2)}ms)`);
+
+          const reader = r.body?.getReader();
+          if (!reader) {
+            const blob = await r.blob();
+            const t5 = performance.now();
+            console.log(`[TIMING] handleStart: Complete audio (${blob.size} bytes) at ${t5.toFixed(2)}ms`);
+            if (blob) speakBlob(blob);
+            return;
+          }
+
+          // Collect all chunks - streaming from OpenAI still reduces backend latency
+          const chunks: BlobPart[] = [];
+          let receivedLength = 0;
+          let firstChunkTime: number | null = null;
+
+          while (true) {
+            const { done, value } = await reader.read();
+
+            if (value) {
+              if (!firstChunkTime) {
+                firstChunkTime = performance.now();
+                console.log(`[TIMING] handleStart: First chunk received at ${firstChunkTime.toFixed(2)}ms (+${(firstChunkTime-t4).toFixed(2)}ms)`);
+              }
+              chunks.push(value);
+              receivedLength += value.length;
+            }
+
+            if (done) {
+              const t5 = performance.now();
+              console.log(`[TIMING] handleStart: Stream complete (${receivedLength} bytes) at ${t5.toFixed(2)}ms (+${(t5-t4).toFixed(2)}ms)`);
+
+              // Create complete blob and play - speech recognition won't start until audio ends
+              const blob = new Blob(chunks, { type: 'audio/mpeg' });
+              const t6 = performance.now();
+              console.log(`[TIMING] handleStart: Blob ready (${blob.size} bytes) at ${t6.toFixed(2)}ms, calling speakBlob`);
+              speakBlob(blob);
+              break;
+            }
+          }
+        })
         .catch(err => console.error('[TTS Error - first question]', err));
 
     } catch (err: any) {
@@ -913,7 +1047,8 @@ speakBlob(audioBlob);
       setShowForm(true);
       setAppPhase('landing');
     }
-  }, [speakBlob]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleRestart = () => {
     cancel();
