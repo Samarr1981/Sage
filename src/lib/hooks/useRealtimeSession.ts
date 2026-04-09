@@ -66,6 +66,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
   const handleRealtimeMessageRef = useRef<((message: any) => void) | null>(null);
   const currentQuestionRef = useRef('');
   const isSageSpeakingRef = useRef(false);
+  const echoGracePeriodRef = useRef(false); // Mobile: block speech detection for a grace period after audio ends
 
   // ── Connect to Realtime API ──────────────────
   const connect = useCallback(async (systemPrompt?: string): Promise<void> => {
@@ -339,9 +340,29 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
             clearInterval(checkInterval);
             console.log('[Realtime] ✅ Audio playback complete');
 
-            // NOW safe to mark Sage as not speaking (prevents echo detection)
+            // Detect mobile for extended echo grace period
+            const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+            // Mark Sage as not speaking
             setIsSageSpeaking(false);
             options.onResponseEnd?.();
+
+            // MOBILE FIX: Add grace period to block echo pickup after audio finishes
+            // Mobile devices have worse acoustic isolation - speakers bleed into mic
+            if (isMobile) {
+              echoGracePeriodRef.current = true;
+              console.log('[Realtime] 🔇 Mobile: Starting 800ms echo grace period');
+
+              // Clear any audio in the buffer that might be echo
+              if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+              }
+
+              setTimeout(() => {
+                echoGracePeriodRef.current = false;
+                console.log('[Realtime] 🔊 Mobile: Echo grace period ended, ready for user input');
+              }, 800); // 800ms grace period on mobile
+            }
 
             // If conclusion was detected, trigger interview completion and disconnect
             if (pendingDisconnectRef.current) {
@@ -443,6 +464,18 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
           return;
         }
 
+        // MOBILE FIX: Block speech detection during grace period after audio ends
+        // This prevents picking up residual echo/room reverb from speakers
+        if (echoGracePeriodRef.current) {
+          console.warn('[Realtime] ⚠️ BLOCKING echo - Mobile grace period active, ignoring speech detection');
+          // Clear the audio buffer to discard residual echo
+          if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+            console.log('[Realtime] Sent input_audio_buffer.clear during mobile grace period');
+          }
+          return;
+        }
+
         console.log('[Realtime] User started speaking');
         currentUserTranscriptRef.current = '';
         setCurrentTranscript('');
@@ -452,7 +485,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
 
       case 'input_audio_buffer.speech_stopped':
         // Ignore if we ignored the corresponding speech_started event
-        if (isSageSpeakingRef.current) {
+        if (isSageSpeakingRef.current || echoGracePeriodRef.current) {
           console.warn('[Realtime] ⚠️ Ignoring speech_stopped - was a false positive');
           return;
         }
@@ -463,17 +496,17 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
         break;
 
       case 'input_audio_buffer.committed':
-        // Ignore buffer commits that happen while Sage is speaking
-        if (isSageSpeakingRef.current) {
-          console.warn('[Realtime] ⚠️ Ignoring buffer commit - Sage is speaking (false positive)');
+        // Ignore buffer commits that happen while Sage is speaking or during grace period
+        if (isSageSpeakingRef.current || echoGracePeriodRef.current) {
+          console.warn('[Realtime] ⚠️ Ignoring buffer commit - Sage is speaking or grace period active (false positive)');
           return;
         }
         console.log('[Realtime] Audio buffer committed');
         break;
 
       case 'conversation.item.input_audio_transcription.delta':
-        // Ignore transcript deltas while Sage is speaking
-        if (isSageSpeakingRef.current) {
+        // Ignore transcript deltas while Sage is speaking or during mobile grace period
+        if (isSageSpeakingRef.current || echoGracePeriodRef.current) {
           return;
         }
 
@@ -491,6 +524,13 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
         // NOTE: This event fires DURING Sage's response (normal API behavior)
         // The user spoke, then Sage started responding, then this transcript arrives
         // Do NOT ignore it just because Sage is currently speaking
+
+        // MOBILE FIX: Block transcripts during grace period (these are echo from just-finished audio)
+        if (echoGracePeriodRef.current) {
+          console.warn('[Realtime] ⚠️ Ignoring transcript during mobile grace period - likely echo');
+          return;
+        }
+
         const transcript = message.transcript?.trim();
         if (transcript) {
           console.log('[Realtime] User transcript complete:', transcript);
