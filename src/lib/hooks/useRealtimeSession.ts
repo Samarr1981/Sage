@@ -148,6 +148,9 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
 
         setStatus('connected');
 
+        // Detect mobile for optimized VAD settings
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
         // Send session update to configure audio format and voice
         const sessionConfig: any = {
           type: 'session.update',
@@ -159,9 +162,9 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
             input_audio_transcription: { model: 'whisper-1' },
             turn_detection: {
               type: 'server_vad',
-              threshold: 0.5,
+              threshold: isMobile ? 0.6 : 0.5, // Higher threshold on mobile to reduce false positives
               prefix_padding_ms: 300,
-              silence_duration_ms: 2500, // 2.5 seconds to allow natural thinking pauses
+              silence_duration_ms: isMobile ? 3000 : 2500, // Longer silence on mobile to avoid cutting off
             },
             temperature: 0.8,
             max_response_output_tokens: 4096,
@@ -496,7 +499,10 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
           const wordCount = transcript.split(/\s+/).filter(Boolean).length;
           const lowerTranscript = transcript.toLowerCase();
 
-          // Known hallucination patterns from background noise
+          // Detect mobile device for stricter filtering
+          const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+          // Known hallucination patterns from background noise (expanded list)
           const hallucinationPatterns = [
             'thank you for watching',
             'thanks for watching',
@@ -505,17 +511,44 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
             'see you',
             'take care',
             'have a good day',
+            'have a nice day',
+            'you for your',
+            'thank you',
+            'thanks',
+            'please subscribe',
+            'like and subscribe',
+            'музыка', // Music in various languages
+            'music',
+            'subtitles',
+            'captions',
           ];
 
           const isHallucination = hallucinationPatterns.some(pattern =>
-            lowerTranscript.includes(pattern) && wordCount <= 6
+            lowerTranscript.includes(pattern)
           );
 
-          const isTooShort = wordCount < 4;
+          // Mobile: require at least 6 words to reduce false positives from noise
+          // Desktop: require at least 4 words
+          const minWords = isMobile ? 6 : 4;
+          const isTooShort = wordCount < minWords;
 
-          if (isTooShort || isHallucination) {
+          // Check for repeated words (gibberish detection)
+          const words = transcript.split(/\s+/).filter(Boolean);
+          const uniqueWords = new Set(words.map((w: string) => w.toLowerCase()));
+          const repetitionRatio = uniqueWords.size / words.length;
+          const isGibberish = wordCount >= 3 && repetitionRatio < 0.6; // More than 40% repeated words
+
+          // Check if transcript is just filler words
+          const fillerWords = ['um', 'uh', 'like', 'you know', 'i mean', 'so', 'well'];
+          const isOnlyFiller = words.every((w: string) => fillerWords.includes(w.toLowerCase()));
+
+          if (isTooShort || isHallucination || isGibberish || isOnlyFiller) {
+            const reason = isTooShort ? `Too short (< ${minWords} words)`
+                         : isGibberish ? 'Gibberish/repeated words detected'
+                         : isOnlyFiller ? 'Only filler words'
+                         : 'Hallucination pattern detected';
             console.warn(`[Realtime] ⚠️ Discarding invalid transcript (${wordCount} words):`, transcript);
-            console.warn('[Realtime] Reason:', isTooShort ? 'Too short (< 4 words)' : 'Hallucination pattern detected');
+            console.warn('[Realtime] Reason:', reason);
             // Clear the transcript and wait for user to speak again
             currentUserTranscriptRef.current = '';
             setCurrentTranscript('');
@@ -721,6 +754,9 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
     }
 
     try {
+      // Detect mobile device
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
       // Get microphone access with echo cancellation
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -728,7 +764,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
           sampleRate: 24000,
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: false, // Prevent mic boost from picking up echo
+          autoGainControl: isMobile, // Enable AGC on mobile to normalize levels and reduce noise
         },
       });
 

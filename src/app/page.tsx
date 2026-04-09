@@ -1104,15 +1104,23 @@ IMPORTANT: Begin the interview immediately when the session starts. Say a brief 
       const t4 = performance.now();
       console.log(`[TIMING] handleStart: Realtime session ready at ${t4.toFixed(2)}ms (+${(t4-t3).toFixed(2)}ms)`);
 
-      // Now safe to start audio capture - WebSocket is fully connected and configured
+      // Detect mobile for optimized startup
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth < 768;
+
+      // Move to session phase FIRST - this shows the UI immediately
+      setAppPhase('session');
+
+      // On mobile: add a small delay to ensure UI renders before starting audio
+      // This makes the loading feel faster by showing the interview screen sooner
+      if (isMobile) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+
+      // Now start audio capture - this can happen in background while UI is visible
       await realtimeSession.startAudioCapture();
 
       const t5 = performance.now();
       console.log(`[TIMING] handleStart: Audio capture started at ${t5.toFixed(2)}ms (+${(t5-t4).toFixed(2)}ms)`);
-
-      // Move to session phase
-      setAppPhase('session');
-
       console.log(`[TIMING] handleStart: Total initialization time: ${(t5-t0).toFixed(2)}ms`);
 
     } catch (err: any) {
