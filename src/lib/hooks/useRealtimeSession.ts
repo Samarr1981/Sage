@@ -321,23 +321,30 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
         break;
 
       case 'response.audio.done':
-        console.log('[Realtime] Audio response complete');
+        console.log('[Realtime] Audio response complete - waiting for playback to finish...');
 
-        // Check if we're waiting to disconnect after conclusion
-        if (pendingDisconnectRef.current) {
-          console.log('[Realtime] ⏳ Audio finished - waiting for playback to complete before disconnect...');
+        // Wait for audio queue to finish playing before marking Sage as done speaking
+        // This prevents microphone from picking up tail-end audio as user speech
+        let attempts = 0;
+        const maxAttempts = 50; // 5 seconds max
+        const checkInterval = setInterval(() => {
+          attempts++;
+          const queueEmpty = audioQueueRef.current.length === 0;
+          const notPlaying = !isPlayingRef.current;
 
-          // Wait for audio queue to finish playing (with timeout)
-          let attempts = 0;
-          const maxAttempts = 50; // 5 seconds max
-          const checkInterval = setInterval(() => {
-            attempts++;
-            const queueEmpty = audioQueueRef.current.length === 0;
-            const notPlaying = !isPlayingRef.current;
+          if ((queueEmpty && notPlaying) || attempts >= maxAttempts) {
+            clearInterval(checkInterval);
+            console.log('[Realtime] ✅ Audio playback complete');
 
-            if ((queueEmpty && notPlaying) || attempts >= maxAttempts) {
-              clearInterval(checkInterval);
-              console.log('[Realtime] ✅ Audio playback complete - now disconnecting WebSocket');
+            // NOW safe to mark Sage as not speaking (prevents echo detection)
+            setIsSageSpeaking(false);
+            options.onResponseEnd?.();
+
+            // If conclusion was detected, trigger interview completion and disconnect
+            if (pendingDisconnectRef.current) {
+              console.log('[Realtime] 🎯 Triggering interview completion after full audio playback');
+              options.onInterviewComplete?.();
+
               stopAudioCapture();
               if (wsRef.current) {
                 wsRef.current.close();
@@ -346,8 +353,8 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
               setStatus('disconnected');
               pendingDisconnectRef.current = false;
             }
-          }, 100);
-        }
+          }
+        }, 100);
         break;
 
       case 'response.audio_transcript.delta':
@@ -404,15 +411,11 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
             const reason = isConclusion
               ? 'Conclusion signal detected'
               : `${totalExchanges} exchanges - absolute safety limit reached (auto-abort)`;
-            console.log(`[Realtime] 🎯 ${reason} - SCHEDULING DISCONNECT AFTER RESPONSE COMPLETES`);
+            console.log(`[Realtime] 🎯 ${reason} - WILL DISCONNECT AFTER AUDIO FULLY PLAYS`);
 
-            // Set flag to disconnect after current response finishes
+            // Set flag to trigger completion after audio finishes playing
+            // onInterviewComplete will be called in response.audio.done handler
             pendingDisconnectRef.current = true;
-
-            // Call onInterviewComplete immediately (starts the evaluation process)
-            options.onInterviewComplete?.();
-
-            // WebSocket will disconnect in response.done handler
           } else if (isConclusion && totalExchanges < 3) {
             console.warn('[Realtime] ⚠️ Conclusion signal detected but only', totalExchanges, 'exchanges - continuing interview');
           }
@@ -420,18 +423,19 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
         break;
 
       case 'response.done':
-        console.log('[Realtime] Response complete');
-        setIsSageSpeaking(false);
-        options.onResponseEnd?.();
+        console.log('[Realtime] Response generation complete (audio may still be playing)');
+        // NOTE: Do NOT set isSageSpeaking = false here
+        // Audio is still playing from the queue - wait for response.audio.done
         break;
 
       case 'input_audio_buffer.speech_started':
         // Ignore false positives when Sage is speaking (detecting her own audio output)
         if (isSageSpeakingRef.current) {
-          console.warn('[Realtime] ⚠️ Ignoring speech_started - Sage is currently speaking (false positive from audio output)');
-          // Cancel the input audio buffer to prevent interruption
+          console.warn('[Realtime] ⚠️ BLOCKING echo - Sage is speaking, ignoring false speech detection');
+          // Cancel the input audio buffer to discard the echo audio
           if (wsRef.current?.readyState === WebSocket.OPEN) {
             wsRef.current.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+            console.log('[Realtime] Sent input_audio_buffer.clear to discard echo');
           }
           return;
         }
@@ -717,13 +721,14 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
     }
 
     try {
-      // Get microphone access
+      // Get microphone access with echo cancellation
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
           sampleRate: 24000,
           echoCancellation: true,
           noiseSuppression: true,
+          autoGainControl: false, // Prevent mic boost from picking up echo
         },
       });
 
