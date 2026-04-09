@@ -100,7 +100,7 @@ function ProgressTracker({ areas }: { areas: TopicArea[] }) {
             }`}>
               {area.name}
             </span>
-            {area.score !== null && (
+            {area.covered && area.score !== null && (
               <span className="ml-auto text-xs text-[var(--accent)]">{area.score}/10</span>
             )}
           </div>
@@ -1227,17 +1227,10 @@ IMPORTANT: Begin the interview immediately when the session starts. Say a brief 
             </div>
           )}
 
-          <div className="flex items-center gap-6 mt-4">
-            <button onClick={handleInterviewComplete}
-              className="text-xs text-[var(--yellow)] hover:text-[var(--yellow)]/80 transition-all duration-300 tracking-widest uppercase border border-[var(--yellow)]/30 px-3 py-1.5 rounded"
-              title="Testing only - manually trigger evaluation report">
-              Force End Interview
-            </button>
-            <button onClick={handleRestart}
-              className="text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-all duration-300 tracking-widest uppercase">
-              End Session
-            </button>
-          </div>
+          <button onClick={handleRestart}
+            className="text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-all duration-300 tracking-widest uppercase mt-4">
+            End Session
+          </button>
         </div>
       )}
 

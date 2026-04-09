@@ -62,8 +62,10 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
   const pendingDisconnectRef = useRef(false);
   const exchangesRef = useRef<ExchangeRecord[]>([]);
   const topicAreasRef = useRef<TopicArea[]>([]);
+  const currentAreaIndexRef = useRef(0);
   const handleRealtimeMessageRef = useRef<((message: any) => void) | null>(null);
   const currentQuestionRef = useRef('');
+  const isSageSpeakingRef = useRef(false);
 
   // ── Connect to Realtime API ──────────────────
   const connect = useCallback(async (systemPrompt?: string): Promise<void> => {
@@ -320,6 +322,32 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
 
       case 'response.audio.done':
         console.log('[Realtime] Audio response complete');
+
+        // Check if we're waiting to disconnect after conclusion
+        if (pendingDisconnectRef.current) {
+          console.log('[Realtime] ⏳ Audio finished - waiting for playback to complete before disconnect...');
+
+          // Wait for audio queue to finish playing (with timeout)
+          let attempts = 0;
+          const maxAttempts = 50; // 5 seconds max
+          const checkInterval = setInterval(() => {
+            attempts++;
+            const queueEmpty = audioQueueRef.current.length === 0;
+            const notPlaying = !isPlayingRef.current;
+
+            if ((queueEmpty && notPlaying) || attempts >= maxAttempts) {
+              clearInterval(checkInterval);
+              console.log('[Realtime] ✅ Audio playback complete - now disconnecting WebSocket');
+              stopAudioCapture();
+              if (wsRef.current) {
+                wsRef.current.close();
+                wsRef.current = null;
+              }
+              setStatus('disconnected');
+              pendingDisconnectRef.current = false;
+            }
+          }, 100);
+        }
         break;
 
       case 'response.audio_transcript.delta':
@@ -367,11 +395,15 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
           ];
           const isConclusion = conclusionSignals.some(signal => lowerTranscript.includes(signal));
 
-          // Safety fallback: auto-conclude after 6 exchanges
-          const hasMinimumExchanges = exchangesRef.current.length >= 6;
+          // Safety fallback: auto-conclude only after 12+ exchanges as absolute safety net
+          // This should rarely fire - Sage should conclude naturally
+          const totalExchanges = exchangesRef.current.length;
+          const shouldAutoAbort = totalExchanges >= 12;
 
-          if (isConclusion || hasMinimumExchanges) {
-            const reason = isConclusion ? 'Conclusion signal detected' : `${exchangesRef.current.length} exchanges completed (auto-conclude)`;
+          if (isConclusion || shouldAutoAbort) {
+            const reason = isConclusion
+              ? 'Conclusion signal detected'
+              : `${totalExchanges} exchanges - absolute safety limit reached (auto-abort)`;
             console.log(`[Realtime] 🎯 ${reason} - SCHEDULING DISCONNECT AFTER RESPONSE COMPLETES`);
 
             // Set flag to disconnect after current response finishes
@@ -381,8 +413,8 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
             options.onInterviewComplete?.();
 
             // WebSocket will disconnect in response.done handler
-          } else if (isConclusion && exchanges.length < 3) {
-            console.warn('[Realtime] ⚠️ Conclusion signal detected but only', exchanges.length, 'exchanges - continuing interview');
+          } else if (isConclusion && totalExchanges < 3) {
+            console.warn('[Realtime] ⚠️ Conclusion signal detected but only', totalExchanges, 'exchanges - continuing interview');
           }
         }
         break;
@@ -391,21 +423,19 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
         console.log('[Realtime] Response complete');
         setIsSageSpeaking(false);
         options.onResponseEnd?.();
-
-        // Check if we're waiting to disconnect after conclusion
-        if (pendingDisconnectRef.current) {
-          console.log('[Realtime] ✅ Response finished - now disconnecting WebSocket');
-          stopAudioCapture();
-          if (wsRef.current) {
-            wsRef.current.close();
-            wsRef.current = null;
-          }
-          setStatus('disconnected');
-          pendingDisconnectRef.current = false;
-        }
         break;
 
       case 'input_audio_buffer.speech_started':
+        // Ignore false positives when Sage is speaking (detecting her own audio output)
+        if (isSageSpeakingRef.current) {
+          console.warn('[Realtime] ⚠️ Ignoring speech_started - Sage is currently speaking (false positive from audio output)');
+          // Cancel the input audio buffer to prevent interruption
+          if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+          }
+          return;
+        }
+
         console.log('[Realtime] User started speaking');
         currentUserTranscriptRef.current = '';
         setCurrentTranscript('');
@@ -414,16 +444,32 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
         break;
 
       case 'input_audio_buffer.speech_stopped':
+        // Ignore if we ignored the corresponding speech_started event
+        if (isSageSpeakingRef.current) {
+          console.warn('[Realtime] ⚠️ Ignoring speech_stopped - was a false positive');
+          return;
+        }
+
         console.log('[Realtime] User stopped speaking - waiting for transcription');
         setIsUserSpeaking(false);
         // The transcript should already be captured from conversation.item.input_audio_transcription.completed
         break;
 
       case 'input_audio_buffer.committed':
+        // Ignore buffer commits that happen while Sage is speaking
+        if (isSageSpeakingRef.current) {
+          console.warn('[Realtime] ⚠️ Ignoring buffer commit - Sage is speaking (false positive)');
+          return;
+        }
         console.log('[Realtime] Audio buffer committed');
         break;
 
       case 'conversation.item.input_audio_transcription.delta':
+        // Ignore transcript deltas while Sage is speaking
+        if (isSageSpeakingRef.current) {
+          return;
+        }
+
         // User's speech is being transcribed in real-time - stream it to display
         if (message.delta) {
           currentUserTranscriptRef.current += message.delta;
@@ -435,9 +481,43 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
 
       case 'conversation.item.input_audio_transcription.completed':
         // User's speech has been transcribed completely
+        // NOTE: This event fires DURING Sage's response (normal API behavior)
+        // The user spoke, then Sage started responding, then this transcript arrives
+        // Do NOT ignore it just because Sage is currently speaking
         const transcript = message.transcript?.trim();
         if (transcript) {
           console.log('[Realtime] User transcript complete:', transcript);
+
+          // Validate transcript to filter hallucinations and mishears
+          const wordCount = transcript.split(/\s+/).filter(Boolean).length;
+          const lowerTranscript = transcript.toLowerCase();
+
+          // Known hallucination patterns from background noise
+          const hallucinationPatterns = [
+            'thank you for watching',
+            'thanks for watching',
+            'bye bye',
+            'goodbye',
+            'see you',
+            'take care',
+            'have a good day',
+          ];
+
+          const isHallucination = hallucinationPatterns.some(pattern =>
+            lowerTranscript.includes(pattern) && wordCount <= 6
+          );
+
+          const isTooShort = wordCount < 4;
+
+          if (isTooShort || isHallucination) {
+            console.warn(`[Realtime] ⚠️ Discarding invalid transcript (${wordCount} words):`, transcript);
+            console.warn('[Realtime] Reason:', isTooShort ? 'Too short (< 4 words)' : 'Hallucination pattern detected');
+            // Clear the transcript and wait for user to speak again
+            currentUserTranscriptRef.current = '';
+            setCurrentTranscript('');
+            return;
+          }
+
           currentUserTranscriptRef.current = transcript;
           lastUserTranscriptRef.current = transcript;
           setCurrentTranscript(transcript);
@@ -445,7 +525,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
 
           // Immediately create exchange record when answer completes
           if (currentQuestionRef.current) {
-            const currentArea = topicAreasRef.current[currentAreaIndex];
+            const currentArea = topicAreasRef.current[currentAreaIndexRef.current];
             const newExchange: ExchangeRecord = {
               areaId: currentArea?.id || 'unknown',
               question: currentQuestionRef.current,
@@ -459,8 +539,37 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
             setExchanges(prev => {
               const updated = [...prev, newExchange];
               console.log('[Realtime] Exchange added - Total exchanges:', updated.length);
+              console.log('[Realtime] Current area:', currentArea?.name, 'ID:', currentArea?.id);
               return updated;
             });
+
+            // Increment question count for current area and check if we should advance
+            setTopicAreas(prev => {
+              const updated = prev.map((area, idx) =>
+                idx === currentAreaIndexRef.current
+                  ? { ...area, questionCount: (area.questionCount || 0) + 1 }
+                  : area
+              );
+              return updated;
+            });
+
+            // Check if we should advance to the next topic area
+            const currentQuestionCount = (currentArea?.questionCount || 0) + 1;
+            const hasMoreAreas = currentAreaIndexRef.current < topicAreasRef.current.length - 1;
+            const shouldAdvance = currentQuestionCount >= 2 && hasMoreAreas;
+
+            if (shouldAdvance) {
+              console.log(`[Realtime] 📍 Advancing from area "${currentArea?.name}" (${currentQuestionCount} questions) to next area`);
+
+              // Mark current area as covered when advancing
+              setTopicAreas(prev => prev.map((area, idx) =>
+                idx === currentAreaIndexRef.current
+                  ? { ...area, covered: true }
+                  : area
+              ));
+
+              setCurrentAreaIndex(prev => prev + 1);
+            }
 
             console.log('[Realtime] Exchange created:', newExchange);
           }
@@ -495,7 +604,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
     console.log(`[Realtime] Starting background evaluation at ${t0.toFixed(2)}ms`);
 
     try {
-      const currentArea = topicAreasRef.current[currentAreaIndex];
+      const currentArea = topicAreasRef.current[currentAreaIndexRef.current];
 
       const res = await fetch('/api/realtime/evaluate', {
         method: 'POST',
@@ -530,7 +639,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
 
         // Update area score
         setTopicAreas(prev => prev.map((area, idx) =>
-          idx === currentAreaIndex
+          idx === currentAreaIndexRef.current
             ? { ...area, score: evaluation.score }
             : area
         ));
@@ -541,7 +650,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
     } finally {
       isEvaluatingRef.current = false;
     }
-  }, [currentAreaIndex]);
+  }, []);
 
   // ── Play audio delta from the model ──────────
   const playAudioDelta = useCallback((base64Audio: string) => {
@@ -741,6 +850,14 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
   useEffect(() => {
     currentQuestionRef.current = currentQuestion;
   }, [currentQuestion]);
+
+  useEffect(() => {
+    currentAreaIndexRef.current = currentAreaIndex;
+  }, [currentAreaIndex]);
+
+  useEffect(() => {
+    isSageSpeakingRef.current = isSageSpeaking;
+  }, [isSageSpeaking]);
 
   useEffect(() => {
     handleRealtimeMessageRef.current = handleRealtimeMessage;
