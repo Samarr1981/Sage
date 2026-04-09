@@ -67,6 +67,8 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
   const currentQuestionRef = useRef('');
   const isSageSpeakingRef = useRef(false);
   const echoGracePeriodRef = useRef(false); // Mobile: block speech detection for a grace period after audio ends
+  const lastAudioEndTimeRef = useRef<number>(0); // Timestamp when Sage's audio last finished
+  const validUserSpeechStartTimeRef = useRef<number>(0); // Timestamp when valid user speech actually started
 
   // ── Connect to Realtime API ──────────────────
   const connect = useCallback(async (systemPrompt?: string): Promise<void> => {
@@ -289,6 +291,17 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
         currentResponseTextRef.current = '';
         setCurrentQuestion(''); // Clear previous question text
         setIsSageSpeaking(true);
+        // Reset valid speech timestamp - we need a fresh speech_started event after this response
+        validUserSpeechStartTimeRef.current = 0;
+        console.log('[Realtime] 🔄 Reset valid speech timestamp - expecting new user input after response');
+
+        // MOBILE FIX: Clear input buffer when Sage starts speaking to discard any pending audio
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        if (isMobile && wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+          console.log('[Realtime] 🔇 Mobile: Cleared input buffer at response start');
+        }
+
         options.onResponseStart?.();
         break;
 
@@ -347,11 +360,15 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
             setIsSageSpeaking(false);
             options.onResponseEnd?.();
 
+            // Record when audio finished - used to reject echo transcripts
+            lastAudioEndTimeRef.current = Date.now();
+            console.log(`[Realtime] 🕐 Audio ended at timestamp: ${lastAudioEndTimeRef.current}`);
+
             // MOBILE FIX: Add grace period to block echo pickup after audio finishes
             // Mobile devices have worse acoustic isolation - speakers bleed into mic
             if (isMobile) {
               echoGracePeriodRef.current = true;
-              console.log('[Realtime] 🔇 Mobile: Starting 800ms echo grace period');
+              console.log('[Realtime] 🔇 Mobile: Starting 1000ms echo grace period');
 
               // Clear any audio in the buffer that might be echo
               if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -361,7 +378,11 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
               setTimeout(() => {
                 echoGracePeriodRef.current = false;
                 console.log('[Realtime] 🔊 Mobile: Echo grace period ended, ready for user input');
-              }, 800); // 800ms grace period on mobile
+                // Clear buffer one more time when grace period ends to ensure clean slate
+                if (wsRef.current?.readyState === WebSocket.OPEN) {
+                  wsRef.current.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+                }
+              }, 1000); // 1000ms grace period - balanced between echo blocking and responsiveness
             }
 
             // If conclusion was detected, trigger interview completion and disconnect
@@ -477,6 +498,10 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
         }
 
         console.log('[Realtime] User started speaking');
+        // Track when valid user speech started - used to reject echo transcripts
+        validUserSpeechStartTimeRef.current = Date.now();
+        console.log(`[Realtime] 🕐 Valid user speech started at timestamp: ${validUserSpeechStartTimeRef.current}`);
+
         currentUserTranscriptRef.current = '';
         setCurrentTranscript('');
         setIsUserSpeaking(true);
@@ -525,22 +550,37 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
         // The user spoke, then Sage started responding, then this transcript arrives
         // Do NOT ignore it just because Sage is currently speaking
 
-        // MOBILE FIX: Block transcripts during grace period (these are echo from just-finished audio)
-        if (echoGracePeriodRef.current) {
-          console.warn('[Realtime] ⚠️ Ignoring transcript during mobile grace period - likely echo');
-          return;
-        }
-
         const transcript = message.transcript?.trim();
         if (transcript) {
           console.log('[Realtime] User transcript complete:', transcript);
+
+          // MOBILE FIX: Echo filtering based on valid speech_started events
+          // The grace period blocks false speech detection from echo
+          // If we got a valid speech_started after audio ended, this transcript is legitimate
+          const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+          if (isMobile) {
+            // Check if there was a valid speech_started event after the last audio ended
+            // Grace period ensures that speech_started events during echo window are blocked
+            if (validUserSpeechStartTimeRef.current <= lastAudioEndTimeRef.current) {
+              console.warn('[Realtime] ⚠️ REJECTING transcript - no valid speech_started after audio ended (echo)');
+              console.warn('[Realtime] Last audio ended:', lastAudioEndTimeRef.current);
+              console.warn('[Realtime] Valid speech started:', validUserSpeechStartTimeRef.current);
+              console.warn('[Realtime] Rejected transcript:', transcript);
+              currentUserTranscriptRef.current = '';
+              setCurrentTranscript('');
+              return;
+            }
+
+            const speechStartDelay = validUserSpeechStartTimeRef.current - lastAudioEndTimeRef.current;
+            console.log(`[Realtime] ✅ Transcript accepted - valid speech started ${speechStartDelay}ms after audio ended`);
+          }
 
           // Validate transcript to filter hallucinations and mishears
           const wordCount = transcript.split(/\s+/).filter(Boolean).length;
           const lowerTranscript = transcript.toLowerCase();
 
-          // Detect mobile device for stricter filtering
-          const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+          // Detect mobile device for stricter filtering (reuse from above if already declared)
+          const isMobileDevice = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
           // Known hallucination patterns from background noise (expanded list)
           const hallucinationPatterns = [
@@ -569,7 +609,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
 
           // Mobile: require at least 6 words to reduce false positives from noise
           // Desktop: require at least 4 words
-          const minWords = isMobile ? 6 : 4;
+          const minWords = isMobileDevice ? 6 : 4;
           const isTooShort = wordCount < minWords;
 
           // Check for repeated words (gibberish detection)
