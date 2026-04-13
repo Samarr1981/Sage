@@ -17,46 +17,116 @@ type AppPhase = 'landing' | 'loading' | 'session' | 'complete';
 // SUBCOMPONENTS
 // ─────────────────────────────────────────────
 
-function WaveOrb({ status }: { status: string }) {
+function LiveOrb({ status, volume = 0 }: { status: string; volume?: number }) {
+  const isIdle = status === 'idle';
+  const isSpeaking = status === 'speaking';
+  const isListening = status === 'listening';
+  const isProcessing = status === 'processing';
+
+  // Volume-reactive bar heights for listening state (0-1 input → 12-32px range)
+  const barBase = 12;
+  const barRange = 20;
   const bars = Array.from({ length: 5 });
+
+  // Core orb colours per state
+  const orbBorder = isSpeaking
+    ? 'rgba(200,184,154,0.7)'
+    : isListening
+    ? 'rgba(16,185,129,0.7)'
+    : isProcessing
+    ? 'rgba(245,158,11,0.7)'
+    : 'rgba(124,58,237,0.55)';
+
+  const orbGlow = isSpeaking
+    ? 'rgba(200,184,154,0.12)'
+    : isListening
+    ? 'rgba(16,185,129,0.10)'
+    : isProcessing
+    ? 'rgba(245,158,11,0.10)'
+    : 'rgba(124,58,237,0.08)';
+
   return (
-    <div className="relative flex items-center justify-center w-32 h-32">
-      <div className={`absolute inset-0 rounded-full transition-all duration-700 ${
-        status === 'speaking'
-          ? 'bg-[radial-gradient(circle,rgba(200,184,154,0.15)_0%,transparent_70%)] animate-pulse-ring'
-          : status === 'listening'
-          ? 'bg-[radial-gradient(circle,rgba(76,175,125,0.15)_0%,transparent_70%)] animate-pulse-ring'
-          : 'bg-transparent'
-      }`} />
-      <div className={`relative z-10 flex items-center justify-center w-20 h-20 rounded-full border transition-all duration-500 ${
-        status === 'speaking'
-          ? 'border-[var(--accent)] bg-[var(--glow)]'
-          : status === 'listening'
-          ? 'border-[var(--green)] bg-[rgba(76,175,125,0.05)]'
-          : status === 'processing'
-          ? 'border-[var(--yellow)] bg-[rgba(212,168,67,0.05)]'
-          : 'border-[var(--border-bright)] bg-[var(--surface)]'
-      }`}>
-        {(status === 'speaking' || status === 'listening') ? (
+    <div className="relative flex items-center justify-center w-36 h-36">
+      {/* Ring waves — speaking (tan) or listening (emerald) */}
+      {(isSpeaking || isListening) && [0, 1, 2].map((i) => (
+        <div
+          key={i}
+          className="absolute rounded-full border"
+          style={{
+            inset: `${isListening ? 20 : 28}px`,
+            borderColor: isListening ? 'rgba(16,185,129,0.4)' : 'rgba(200,184,154,0.35)',
+            animation: `orb-ring-wave ${isListening ? 1.6 : 2.2}s ease-out ${i * (isListening ? 0.45 : 0.6)}s infinite`,
+          }}
+        />
+      ))}
+
+      {/* Processing arc — rotating conic gradient */}
+      {isProcessing && (
+        <div
+          className="absolute rounded-full"
+          style={{
+            inset: '16px',
+            background: 'conic-gradient(from 0deg, rgba(245,158,11,0.8) 0deg, transparent 120deg)',
+            animation: 'orb-rotate 1.4s linear infinite',
+          }}
+        />
+      )}
+
+      {/* Core orb */}
+      <div
+        className="relative z-10 flex items-center justify-center w-20 h-20 rounded-full border transition-all duration-500"
+        style={{
+          borderColor: orbBorder,
+          background: `radial-gradient(circle at 38% 36%, ${orbGlow}, transparent 68%)`,
+          boxShadow: `0 0 28px ${orbGlow}, 0 0 8px ${orbGlow}`,
+          animation: isIdle ? 'orb-breathe 3.6s ease-in-out infinite' : 'none',
+        }}
+      >
+        {isSpeaking && (
           <div className="flex items-center gap-[3px]">
             {bars.map((_, i) => (
-              <div key={i} className="w-[3px] rounded-full animate-wave"
+              <div key={i} className="w-[3px] rounded-full"
                 style={{
                   height: '20px',
-                  animationDelay: `${i * 0.12}s`,
-                  backgroundColor: status === 'speaking' ? 'var(--accent)' : 'var(--green)',
+                  backgroundColor: 'var(--accent)',
+                  animation: `wave 0.9s ease-in-out ${i * 0.12}s infinite`,
                 }} />
             ))}
           </div>
-        ) : status === 'processing' ? (
-          <div className="flex gap-1">
+        )}
+
+        {isListening && (
+          <div className="flex items-center gap-[3px]">
+            {bars.map((_, i) => {
+              const offset = Math.abs(i - 2) / 2; // taper edges
+              const heightPx = barBase + (volume * barRange * (1 - offset * 0.5));
+              return (
+                <div key={i} className="w-[3px] rounded-full transition-all duration-75"
+                  style={{
+                    height: `${heightPx}px`,
+                    backgroundColor: '#10b981',
+                    animation: `wave ${0.7 + offset * 0.3}s ease-in-out ${i * 0.1}s infinite`,
+                  }} />
+              );
+            })}
+          </div>
+        )}
+
+        {isProcessing && (
+          <div className="flex gap-1.5 items-center">
             {[0, 1, 2].map((i) => (
-              <div key={i} className="w-1 h-1 rounded-full bg-[var(--yellow)] animate-bounce"
-                style={{ animationDelay: `${i * 0.15}s` }} />
+              <div key={i} className="w-1.5 h-1.5 rounded-full"
+                style={{
+                  backgroundColor: '#f59e0b',
+                  animation: `orb-bounce 0.8s ease-in-out ${i * 0.18}s infinite`,
+                }} />
             ))}
           </div>
-        ) : (
-          <div className="w-2 h-2 rounded-full bg-[var(--text-muted)]" />
+        )}
+
+        {isIdle && (
+          <div className="w-2.5 h-2.5 rounded-full"
+            style={{ background: 'rgba(124,58,237,0.7)', boxShadow: '0 0 10px rgba(124,58,237,0.5)' }} />
         )}
       </div>
     </div>
@@ -67,8 +137,8 @@ function StatusLabel({ status }: { status: string }) {
   const map: Record<string, { label: string; color: string }> = {
     idle: { label: 'ready', color: 'var(--text-muted)' },
     speaking: { label: 'sage is speaking...', color: 'var(--accent)' },
-    listening: { label: 'listening...', color: 'var(--green)' },
-    processing: { label: 'thinking...', color: 'var(--yellow)' },
+    listening: { label: 'listening...', color: '#10b981' },
+    processing: { label: 'thinking...', color: '#f59e0b' },
   };
   const current = map[status] || map.idle;
   return (
@@ -127,12 +197,86 @@ function FeedbackBadge({ quality }: { quality: string | null }) {
   );
 }
 
+// ── Animated circular score ring ─────────────────────────────────────────────
+function ScoreRing({ score }: { score: number }) {
+  const R = 22;
+  const SIZE = 56;
+  const STROKE = 3.5;
+  const circumference = 2 * Math.PI * R;
+  const color = score >= 7 ? '#10b981' : score >= 4 ? '#f59e0b' : '#c0504a';
+
+  const [displayed, setDisplayed] = useState(0);
+  const [dashOffset, setDashOffset] = useState(circumference);
+
+  useEffect(() => {
+    const duration = 1200;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const t = Math.min((now - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
+      setDisplayed(Math.round(eased * score));
+      setDashOffset(circumference - circumference * (eased * score) / 10);
+      if (t < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }, [score, circumference]);
+
+  return (
+    <div className="relative flex-shrink-0" style={{ width: SIZE, height: SIZE }}>
+      <svg width={SIZE} height={SIZE} style={{ transform: 'rotate(-90deg)' }}>
+        <circle cx={SIZE / 2} cy={SIZE / 2} r={R} fill="none"
+          stroke="rgba(255,255,255,0.06)" strokeWidth={STROKE} />
+        <circle cx={SIZE / 2} cy={SIZE / 2} r={R} fill="none"
+          stroke={color} strokeWidth={STROKE}
+          strokeDasharray={circumference} strokeDashoffset={dashOffset}
+          strokeLinecap="round" />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="text-sm font-medium leading-none" style={{ color }}>{displayed}</span>
+        <span className="text-[9px] leading-none mt-0.5" style={{ color: 'var(--text-muted)' }}>/10</span>
+      </div>
+    </div>
+  );
+}
+
+// ── Animated readiness tick-up ────────────────────────────────────────────────
+function AnimatedReadiness({ rating }: { rating: string }) {
+  const match = rating.match(/\d+/);
+  const target = match ? parseInt(match[0], 10) : null;
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    if (target === null) return;
+    const duration = 1500;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const t = Math.min((now - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setCount(Math.round(eased * target));
+      if (t < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }, [target]);
+
+  const display = target !== null ? rating.replace(/\d+/, String(count)) : rating;
+  return (
+    <div className="text-5xl font-light text-[var(--accent)] mb-1"
+      style={{ fontFamily: 'DM Serif Display, serif' }}>
+      {display}
+    </div>
+  );
+}
+
 function EvaluationScreen({ evaluation, role, exchanges, onRestart }: {
   evaluation: FinalEvaluation;
   role: string;
   exchanges: { question: string; answer: string }[];
   onRestart: () => void;
 }) {
+  // ── Mount flag drives all stagger animations ──────────────────────────────
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+
   // ── Early-exit guard ────────────────────────────────────────────────────
   // Fires when the session was cut short before meaningful data was collected.
   // Condition: total transcript chars < 1000  OR  fewer than 5 assistant turns.
@@ -189,11 +333,8 @@ function EvaluationScreen({ evaluation, role, exchanges, onRestart }: {
             Session Incomplete
           </div>
         ) : (
-          /* ── Full readiness percentage ─────────────────────────────── */
-          <div className="text-5xl font-light text-[var(--accent)] mb-1"
-            style={{ fontFamily: 'DM Serif Display, serif' }}>
-            {evaluation.readinessRating}
-          </div>
+          /* ── Full readiness percentage — animated tick-up ───────────── */
+          <AnimatedReadiness rating={evaluation.readinessRating} />
         )}
 
         {isEarlyExit ? (
@@ -217,19 +358,12 @@ function EvaluationScreen({ evaluation, role, exchanges, onRestart }: {
           </p>
         </div>
         {evaluation.areaScores.map((area, i) => (
-          <div key={i} className="px-4 py-3 border-b border-[var(--border)] last:border-0">
-            <div className="flex items-center justify-between mb-1">
+          <div key={i} className="px-4 py-4 border-b border-[var(--border)] last:border-0 flex items-start gap-4">
+            <ScoreRing score={area.score} />
+            <div className="flex-1 flex flex-col gap-1 pt-1">
               <span className="text-sm text-[var(--text-primary)]">{area.areaName}</span>
-              <span className="text-sm text-[var(--accent)]">{area.score}/10</span>
+              <p className="text-xs text-[var(--text-secondary)] leading-relaxed">{area.feedback}</p>
             </div>
-            <div className="w-full h-[2px] bg-[var(--border)] rounded-full mb-2">
-              <div className="h-full rounded-full transition-all duration-1000"
-                style={{
-                  width: `${area.score * 10}%`,
-                  backgroundColor: area.score >= 7 ? 'var(--green)' : area.score >= 4 ? 'var(--yellow)' : 'var(--red)',
-                }} />
-            </div>
-            <p className="text-xs text-[var(--text-secondary)]">{area.feedback}</p>
           </div>
         ))}
       </div>
@@ -246,8 +380,14 @@ function EvaluationScreen({ evaluation, role, exchanges, onRestart }: {
           </p>
           <ul className="flex flex-col gap-2">
             {evaluation.strengths.map((s, i) => (
-              <li key={i} className="text-xs text-[var(--text-secondary)] flex gap-2">
-                <span style={{ color: 'var(--yellow)' }}>◆</span> {s}
+              <li key={i} className="text-xs text-[var(--text-secondary)] pl-3 py-1 leading-relaxed"
+                style={{
+                  borderLeft: '2px solid #10b981',
+                  opacity: mounted ? 1 : 0,
+                  transform: mounted ? 'translateY(0)' : 'translateY(6px)',
+                  transition: `opacity 0.4s ease ${i * 100}ms, transform 0.4s ease ${i * 100}ms`,
+                }}>
+                {s}
               </li>
             ))}
           </ul>
@@ -262,8 +402,14 @@ function EvaluationScreen({ evaluation, role, exchanges, onRestart }: {
           </p>
           <ul className="flex flex-col gap-2">
             {evaluation.strengths.map((s, i) => (
-              <li key={i} className="text-xs text-[var(--text-secondary)] flex gap-2">
-                <span className="text-[var(--green)]">+</span> {s}
+              <li key={i} className="text-xs text-[var(--text-secondary)] pl-3 py-1 leading-relaxed"
+                style={{
+                  borderLeft: '2px solid #10b981',
+                  opacity: mounted ? 1 : 0,
+                  transform: mounted ? 'translateY(0)' : 'translateY(6px)',
+                  transition: `opacity 0.4s ease ${i * 100}ms, transform 0.4s ease ${i * 100}ms`,
+                }}>
+                {s}
               </li>
             ))}
           </ul>
@@ -279,7 +425,16 @@ function EvaluationScreen({ evaluation, role, exchanges, onRestart }: {
             </p>
           </div>
           {evaluation.weakMoments.map((moment, i) => (
-            <div key={i} className="px-4 py-4 border-b border-[var(--border)] last:border-0 flex flex-col gap-2">
+            <div key={i} className="py-4 border-b border-[var(--border)] last:border-0 flex flex-col gap-2"
+              style={{
+                paddingLeft: '16px',
+                borderLeft: '2px solid #f59e0b',
+                marginLeft: '16px',
+                marginRight: '16px',
+                opacity: mounted ? 1 : 0,
+                transform: mounted ? 'translateY(0)' : 'translateY(6px)',
+                transition: `opacity 0.4s ease ${i * 100}ms, transform 0.4s ease ${i * 100}ms`,
+              }}>
               <p className="text-xs text-[var(--text-muted)] tracking-wide uppercase">Question</p>
               <p className="text-sm text-[var(--text-primary)]">"{moment.question}"</p>
               <p className="text-xs text-[var(--text-muted)] tracking-wide uppercase mt-1">Your Answer</p>
@@ -308,6 +463,74 @@ function EvaluationScreen({ evaluation, role, exchanges, onRestart }: {
         className="w-full py-3 border border-[var(--border-bright)] rounded-lg text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--accent)] transition-all duration-300 tracking-widest uppercase">
         Start New Session
       </button>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// MOBILE READY SCREEN
+// Only shown on mobile between form submission
+// and the actual Vapi session start.
+// ─────────────────────────────────────────────
+function ReadyScreen({ role, experienceLevel, interviewType, onBegin }: {
+  role: string;
+  experienceLevel: ExperienceLevel;
+  interviewType: InterviewType;
+  onBegin: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex flex-col items-center justify-center px-6"
+      style={{ background: 'var(--bg)' }}
+    >
+      {/* Pulse animation injected inline — no globals.css change needed */}
+      <style>{`
+        @keyframes readyGlow {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(200,184,154,0.40); }
+          55%       { box-shadow: 0 0 0 16px rgba(200,184,154,0); }
+        }
+        .ready-btn-pulse { animation: readyGlow 2.2s ease-in-out infinite; }
+      `}</style>
+
+      {/* Interview details */}
+      <div className="text-center mb-10 animate-fade-in">
+        <p className="text-xs text-[var(--text-secondary)] tracking-widest uppercase mb-5">
+          Your Interview
+        </p>
+        <p
+          className="text-3xl text-[var(--text-primary)] mb-2"
+          style={{ fontFamily: 'DM Serif Display, serif' }}
+        >
+          {role}
+        </p>
+        <p className="text-sm text-[var(--text-secondary)] capitalize">
+          {experienceLevel}&nbsp;·&nbsp;{interviewType}
+        </p>
+      </div>
+
+      {/* Breathing moment */}
+      <div className="text-center mb-12 animate-fade-in">
+        <p
+          className="text-xl text-[var(--text-secondary)] leading-relaxed"
+          style={{ fontFamily: 'DM Serif Display, serif' }}
+        >
+          Take a breath. You've got this.
+        </p>
+      </div>
+
+      {/* CTA */}
+      <div className="w-full max-w-sm flex flex-col items-center gap-4 animate-fade-in">
+        <button
+          onClick={onBegin}
+          className="ready-btn-pulse w-full py-5 rounded-xl text-sm tracking-widest uppercase font-medium transition-opacity active:opacity-80"
+          style={{ background: 'var(--accent)', color: 'var(--bg)' }}
+        >
+          I'm Ready — Begin Interview
+        </button>
+        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+          Make sure your volume is turned up
+        </p>
+      </div>
     </div>
   );
 }
@@ -521,6 +744,489 @@ const InterviewForm = memo(function InterviewForm({
 });
 
 // ─────────────────────────────────────────────
+// DEMO CONTENT — animation loop for hero embed.
+// No section wrapper. Pauses when off-screen.
+// ─────────────────────────────────────────────
+
+const DEMO_SAGE1 = "Tell me about a time you had to debug a critical issue under pressure.";
+const DEMO_USER  = "At my last role, our payment service started failing in production at 2am...";
+const DEMO_SAGE2 = "How did you prioritize what to investigate first?";
+
+const T_SAGE1 = 2600;
+const T_USER  = 5200;
+const T_PROC  = 6200;
+const T_SAGE2 = 8000;
+
+function DemoCursor() {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: 'inline-block',
+        width: '2px',
+        height: '0.88em',
+        background: 'currentColor',
+        marginLeft: '2px',
+        verticalAlign: 'text-bottom',
+        borderRadius: '1px',
+        animation: 'blink 0.75s ease-in-out infinite',
+      }}
+    />
+  );
+}
+
+function DemoContent() {
+  const [elapsed, setElapsed] = useState(0);
+  const visibleRef = useRef(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      ([entry]) => { visibleRef.current = entry.isIntersecting; },
+      { threshold: 0.1 },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!visibleRef.current) return;
+      setElapsed(prev => (prev + 16 >= T_SAGE2 ? 0 : prev + 16));
+    }, 16);
+    return () => clearInterval(id);
+  }, []);
+
+  let orbStatus: string;
+  let sage1 = '';
+  let userMsg = '';
+  let sage2 = '';
+  let activeCursor: 'sage1' | 'user' | 'sage2' | null = null;
+  let fakeVolume = 0;
+
+  if (elapsed <= T_SAGE1) {
+    orbStatus = 'speaking';
+    const n = Math.floor((elapsed / T_SAGE1) * DEMO_SAGE1.length);
+    sage1 = DEMO_SAGE1.slice(0, n);
+    if (n < DEMO_SAGE1.length) activeCursor = 'sage1';
+  } else if (elapsed <= T_USER) {
+    orbStatus = 'listening';
+    sage1 = DEMO_SAGE1;
+    const n = Math.floor(((elapsed - T_SAGE1) / (T_USER - T_SAGE1)) * DEMO_USER.length);
+    userMsg = DEMO_USER.slice(0, n);
+    if (n < DEMO_USER.length) activeCursor = 'user';
+    fakeVolume = Math.abs(Math.sin(elapsed / 220)) * 0.65 + 0.2;
+  } else if (elapsed <= T_PROC) {
+    orbStatus = 'processing';
+    sage1 = DEMO_SAGE1;
+    userMsg = DEMO_USER;
+  } else {
+    orbStatus = 'speaking';
+    sage1 = DEMO_SAGE1;
+    userMsg = DEMO_USER;
+    const n = Math.floor(((elapsed - T_PROC) / (T_SAGE2 - T_PROC)) * DEMO_SAGE2.length);
+    sage2 = DEMO_SAGE2.slice(0, n);
+    if (n < DEMO_SAGE2.length) activeCursor = 'sage2';
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className="w-full rounded-2xl overflow-hidden"
+      style={{
+        background: '#111111',
+        border: '1px solid rgba(200,184,154,0.13)',
+        boxShadow: '0 24px 60px rgba(0,0,0,0.55)',
+      }}
+    >
+      {/* Chrome bar */}
+      <div className="flex items-center gap-2 px-5 py-3.5 border-b"
+        style={{ borderColor: 'rgba(200,184,154,0.07)', background: 'rgba(200,184,154,0.02)' }}>
+        {[0, 1, 2].map(d => (
+          <div key={d} className="w-2.5 h-2.5 rounded-full" style={{ background: 'rgba(255,255,255,0.08)' }} />
+        ))}
+        <span className="ml-3 text-[11px] tracking-widest uppercase" style={{ color: 'rgba(255,255,255,0.14)' }}>
+          sage · interview session
+        </span>
+        <div className="ml-auto flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+            style={{ background: '#10b981', boxShadow: '0 0 6px rgba(16,185,129,0.6)', animation: 'pulse-dot 2s ease-in-out infinite' }} />
+          <span className="text-[11px]" style={{ color: '#10b981' }}>live</span>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="flex flex-col sm:flex-row" style={{ minHeight: '280px' }}>
+        {/* Orb panel */}
+        <div className="flex flex-col items-center justify-center gap-4 px-8 py-8 flex-shrink-0 border-b sm:border-b-0 sm:border-r"
+          style={{ minWidth: '180px', borderColor: 'rgba(200,184,154,0.06)', background: 'rgba(0,0,0,0.25)' }}>
+          <LiveOrb status={orbStatus} volume={fakeVolume} />
+          <StatusLabel status={orbStatus} />
+        </div>
+
+        {/* Transcript */}
+        <div className="flex-1 flex flex-col gap-4 p-5 sm:p-6 overflow-hidden">
+          {sage1 && (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[10px] tracking-widest uppercase" style={{ color: 'rgba(200,184,154,0.38)' }}>Sage</span>
+              <div className="self-start rounded-xl rounded-tl-sm px-4 py-2.5"
+                style={{ maxWidth: '90%', background: 'rgba(200,184,154,0.06)', border: '1px solid rgba(200,184,154,0.11)' }}>
+                <p className="text-sm leading-relaxed" style={{ color: '#c8b89a' }}>
+                  {sage1}{activeCursor === 'sage1' && <DemoCursor />}
+                </p>
+              </div>
+            </div>
+          )}
+          {userMsg && (
+            <div className="flex flex-col gap-1.5 items-end">
+              <span className="text-[10px] tracking-widest uppercase" style={{ color: 'rgba(16,185,129,0.38)' }}>You</span>
+              <div className="self-end rounded-xl rounded-tr-sm px-4 py-2.5"
+                style={{ maxWidth: '90%', background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.16)' }}>
+                <p className="text-sm leading-relaxed" style={{ color: 'rgba(240,235,227,0.88)' }}>
+                  {userMsg}{activeCursor === 'user' && <DemoCursor />}
+                </p>
+              </div>
+            </div>
+          )}
+          {sage2 && (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[10px] tracking-widest uppercase" style={{ color: 'rgba(200,184,154,0.38)' }}>Sage</span>
+              <div className="self-start rounded-xl rounded-tl-sm px-4 py-2.5"
+                style={{ maxWidth: '90%', background: 'rgba(200,184,154,0.06)', border: '1px solid rgba(200,184,154,0.11)' }}>
+                <p className="text-sm leading-relaxed" style={{ color: '#c8b89a' }}>
+                  {sage2}{activeCursor === 'sage2' && <DemoCursor />}
+                </p>
+              </div>
+            </div>
+          )}
+          {!sage1 && (
+            <div className="flex-1 flex items-center justify-center">
+              <p className="text-xs" style={{ color: 'rgba(255,255,255,0.06)' }}>session starting...</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// READINESS SCORE REVEAL (Part 3)
+// ─────────────────────────────────────────────
+function ReadinessSection() {
+  const [progress, setProgress] = useState(0);
+  const [statsVisible, setStatsVisible] = useState(false);
+  const sectionRef = useRef<HTMLDivElement>(null);
+  const triggered = useRef(false);
+
+  useEffect(() => {
+    const el = sectionRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !triggered.current) {
+          triggered.current = true;
+          const start = performance.now();
+          const duration = 2000;
+          const target = 84;
+          const tick = (now: number) => {
+            const t = Math.min((now - start) / duration, 1);
+            const eased = 1 - Math.pow(1 - t, 3);
+            setProgress(Math.round(eased * target));
+            if (t < 1) requestAnimationFrame(tick);
+            else setTimeout(() => setStatsVisible(true), 300);
+          };
+          requestAnimationFrame(tick);
+        }
+      },
+      { threshold: 0.3 },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+
+  const R = 78; const SIZE = 180; const STROKE = 7;
+  const circumference = 2 * Math.PI * R;
+  const dashOffset = circumference - (circumference * progress / 100);
+
+  const cardStyle: React.CSSProperties = {
+    background: '#141414',
+    border: '1px solid rgba(200,184,154,0.11)',
+    borderRadius: '12px',
+    padding: '24px',
+    opacity: statsVisible ? 1 : 0,
+    transform: statsVisible ? 'translateY(0)' : 'translateY(12px)',
+    transition: 'opacity 0.5s ease 0.3s, transform 0.5s ease 0.3s',
+  };
+
+  return (
+    <section ref={sectionRef} className="px-6 py-24 border-t" style={{ borderColor: 'var(--border)' }}>
+      <div className="max-w-6xl mx-auto flex flex-col items-center gap-16">
+        <p className="text-xs tracking-[0.2em] uppercase" style={{ color: '#f59e0b' }}>
+          What You Walk Away With
+        </p>
+
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_auto_1fr] items-center gap-10 lg:gap-14 w-full">
+
+          {/* Left card — Topics Covered */}
+          <div style={cardStyle} className="order-2 lg:order-1">
+            <p className="text-xs tracking-widest uppercase mb-4" style={{ color: 'var(--text-secondary)' }}>
+              Topics Covered
+            </p>
+            <div className="flex flex-col gap-2.5">
+              {['Technical Depth', 'Behavioral Judgment', 'Problem Solving'].map(topic => (
+                <div key={topic} className="flex items-center gap-3 px-4 py-2.5 rounded-lg"
+                  style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.16)' }}>
+                  <span className="w-2 h-2 rounded-full flex-shrink-0"
+                    style={{ background: '#10b981', boxShadow: '0 0 7px rgba(16,185,129,0.5)' }} />
+                  <span className="text-sm" style={{ color: 'var(--text-primary)' }}>{topic}</span>
+                  <span className="ml-auto text-xs" style={{ color: '#10b981' }}>covered</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Center — Large ring */}
+          <div className="flex flex-col items-center gap-5 order-1 lg:order-2">
+            <div className="relative" style={{ width: SIZE, height: SIZE }}>
+              <svg width={SIZE} height={SIZE} style={{ transform: 'rotate(-90deg)' }}>
+                <circle cx={SIZE / 2} cy={SIZE / 2} r={R} fill="none"
+                  stroke="rgba(255,255,255,0.05)" strokeWidth={STROKE} />
+                <circle cx={SIZE / 2} cy={SIZE / 2} r={R} fill="none"
+                  stroke="#10b981" strokeWidth={STROKE}
+                  strokeDasharray={circumference} strokeDashoffset={dashOffset}
+                  strokeLinecap="round" />
+              </svg>
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-1">
+                <span style={{ fontFamily: 'DM Serif Display, serif', fontSize: '3rem', color: '#c8b89a', lineHeight: 1 }}>
+                  {progress}%
+                </span>
+                <span className="text-[11px] tracking-wide" style={{ color: 'var(--text-muted)' }}>readiness</span>
+              </div>
+            </div>
+            <p className="text-sm text-center" style={{ color: 'var(--text-secondary)', maxWidth: '150px' }}>
+              Your Interview Readiness Score
+            </p>
+          </div>
+
+          {/* Right card — Weak Moments */}
+          <div style={cardStyle} className="order-3">
+            <p className="text-xs tracking-widest uppercase mb-4" style={{ color: 'var(--text-secondary)' }}>
+              Weak Moments Identified
+            </p>
+            <div className="flex flex-col gap-3">
+              {[
+                { q: '"How do you handle conflict?"', note: '"We usually just figured it out as a team..." — lacked personal ownership' },
+                { q: '"Tell me about a failure."', note: '"It kind of worked out in the end..." — no lesson extracted' },
+              ].map(({ q, note }, i) => (
+                <div key={i} className="flex flex-col gap-1 pl-3 py-1.5" style={{ borderLeft: '2px solid #f59e0b' }}>
+                  <p className="text-[11px] font-medium" style={{ color: '#f59e0b' }}>{q}</p>
+                  <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>{note}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ─────────────────────────────────────────────
+// QUESTION TICKER (Part 4)
+// ─────────────────────────────────────────────
+const TICKER_QUESTIONS = [
+  'Tell me about a time you failed',
+  'Walk me through your system design approach',
+  'How do you handle ambiguity?',
+  'Describe your biggest technical challenge',
+  'Why do you want this role?',
+  'How do you prioritize under pressure?',
+  'Tell me about a conflict with a teammate',
+  "What's your debugging process?",
+];
+
+function QuestionTicker() {
+  const doubled = [...TICKER_QUESTIONS, ...TICKER_QUESTIONS];
+  return (
+    <div className="border-t border-b overflow-hidden" style={{ borderColor: 'var(--border)', paddingTop: '48px', paddingBottom: '48px' }}>
+      <p className="text-center text-xs tracking-[0.15em] mb-8 px-6" style={{ color: 'var(--text-muted)' }}>
+        Sage asks the questions that matter
+      </p>
+      <div style={{ animation: 'ticker-scroll 52s linear infinite', width: 'max-content', display: 'flex', alignItems: 'center' }}>
+        {doubled.map((q, i) => (
+          <span key={i} style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>
+            <span style={{
+              padding: '10px 22px',
+              borderRadius: '999px',
+              fontSize: '13px',
+              letterSpacing: '0.01em',
+              whiteSpace: 'nowrap',
+              background: '#1a1a1a',
+              border: '1px solid rgba(200,184,154,0.09)',
+              color: '#c8b89a',
+              flexShrink: 0,
+            }}>{q}</span>
+            <span style={{ margin: '0 16px', width: '5px', height: '5px', borderRadius: '50%', background: '#f59e0b', opacity: 0.55, flexShrink: 0 }} />
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// MOCK SCORE RING — used in report preview only
+// ─────────────────────────────────────────────
+function MockScoreRing({ label, target }: { label: string; target: number }) {
+  const [progress, setProgress] = useState(0);
+  const triggered = useRef(false);
+  const ringRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = ringRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !triggered.current) {
+          triggered.current = true;
+          const start = performance.now();
+          const duration = 1200;
+          const tick = (now: number) => {
+            const t = Math.min((now - start) / duration, 1);
+            const eased = 1 - Math.pow(1 - t, 3);
+            setProgress(Math.round(eased * target));
+            if (t < 1) requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        }
+      },
+      { threshold: 0.5 },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [target]);
+
+  const R = 36; const SIZE = 88; const STROKE = 4.5;
+  const circ = 2 * Math.PI * R;
+  const offset = circ - (circ * progress / 100);
+
+  return (
+    <div ref={ringRef} className="flex flex-col items-center gap-3">
+      <div className="relative" style={{ width: SIZE, height: SIZE }}>
+        <svg width={SIZE} height={SIZE} style={{ transform: 'rotate(-90deg)' }}>
+          <circle cx={SIZE / 2} cy={SIZE / 2} r={R} fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth={STROKE} />
+          <circle cx={SIZE / 2} cy={SIZE / 2} r={R} fill="none" stroke="#10b981" strokeWidth={STROKE}
+            strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round" />
+        </svg>
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span style={{ fontSize: '15px', fontWeight: 500, color: '#c8b89a' }}>{progress}%</span>
+        </div>
+      </div>
+      <p className="text-xs tracking-wide text-center" style={{ color: 'var(--text-secondary)' }}>{label}</p>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// MOCK EVALUATION REPORT PREVIEW (Part 5)
+// Hardcoded — not the real EvaluationScreen.
+// ─────────────────────────────────────────────
+const MOCK_REPORT_SCORES = [
+  { label: 'Technical', target: 78 },
+  { label: 'Behavioral', target: 85 },
+  { label: 'Communication', target: 80 },
+];
+const MOCK_REPORT_STRENGTHS = [
+  'Clearly articulated system design trade-offs with specific examples',
+  'Demonstrated self-awareness when reflecting on past failures',
+  'Quantified impact — mentioned concrete metrics and outcomes',
+];
+const MOCK_REPORT_GAPS = [
+  '"We kind of figured it out together..." — avoided personal ownership',
+  '"It eventually worked out..." — no lesson or process change extracted',
+];
+
+function MockReportSection() {
+  const [listsVisible, setListsVisible] = useState(false);
+  const sectionRef = useRef<HTMLDivElement>(null);
+  const triggered = useRef(false);
+
+  useEffect(() => {
+    const el = sectionRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !triggered.current) {
+          triggered.current = true;
+          setTimeout(() => setListsVisible(true), 1300);
+        }
+      },
+      { threshold: 0.2 },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+
+  return (
+    <section ref={sectionRef} className="px-6 py-24 border-t" style={{ borderColor: 'var(--border)' }}>
+      <div className="max-w-4xl mx-auto flex flex-col items-center gap-12">
+        <p className="text-xs tracking-[0.2em] uppercase" style={{ color: '#f59e0b' }}>See Your Full Report</p>
+
+        <div className="w-full rounded-2xl p-8 sm:p-10 flex flex-col gap-8"
+          style={{ background: '#141414', border: '1px solid rgba(200,184,154,0.11)' }}>
+
+          {/* Score rings */}
+          <div className="flex items-start justify-center gap-8 sm:gap-14 flex-wrap">
+            {MOCK_REPORT_SCORES.map(s => (
+              <MockScoreRing key={s.label} label={s.label} target={s.target} />
+            ))}
+          </div>
+
+          <div className="border-t" style={{ borderColor: 'rgba(200,184,154,0.07)' }} />
+
+          {/* Two columns */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            <div className="flex flex-col gap-3">
+              <p className="text-xs tracking-widest uppercase mb-1" style={{ color: '#10b981' }}>Strengths</p>
+              {MOCK_REPORT_STRENGTHS.map((s, i) => (
+                <p key={i} className="text-xs leading-relaxed pl-3 py-1"
+                  style={{
+                    borderLeft: '2px solid #10b981',
+                    color: 'var(--text-secondary)',
+                    opacity: listsVisible ? 1 : 0,
+                    transform: listsVisible ? 'translateY(0)' : 'translateY(6px)',
+                    transition: `opacity 0.4s ease ${i * 100}ms, transform 0.4s ease ${i * 100}ms`,
+                  }}>{s}</p>
+              ))}
+            </div>
+            <div className="flex flex-col gap-3">
+              <p className="text-xs tracking-widest uppercase mb-1" style={{ color: '#f59e0b' }}>Weak Moments</p>
+              {MOCK_REPORT_GAPS.map((g, i) => (
+                <p key={i} className="text-xs leading-relaxed pl-3 py-1 italic"
+                  style={{
+                    borderLeft: '2px solid #f59e0b',
+                    color: 'var(--text-muted)',
+                    opacity: listsVisible ? 1 : 0,
+                    transform: listsVisible ? 'translateY(0)' : 'translateY(6px)',
+                    transition: `opacity 0.4s ease ${(i + MOCK_REPORT_STRENGTHS.length) * 100}ms, transform 0.4s ease ${(i + MOCK_REPORT_STRENGTHS.length) * 100}ms`,
+                  }}>{g}</p>
+              ))}
+            </div>
+          </div>
+
+          <p className="text-xs text-center" style={{ color: 'var(--text-muted)' }}>
+            Generated after every session. Yours will reflect your actual answers.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ─────────────────────────────────────────────
 // LANDING PAGE — memoized so it never re-renders
 // while the form modal is open or being typed into
 // ─────────────────────────────────────────────
@@ -530,174 +1236,139 @@ const LandingPage = memo(function LandingPage({ onCtaClick }: { onCtaClick: () =
       {/* ── NAV ── */}
       <nav
         className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between px-6 sm:px-10 py-5 border-b"
-        style={{ background: 'rgba(13,13,20,0.88)', backdropFilter: 'blur(20px)', borderColor: 'rgba(255,255,255,0.06)' }}
+        style={{ background: 'rgba(10,10,10,0.92)', backdropFilter: 'blur(20px)', borderColor: '#1c1c1c' }}
       >
-        <span className="text-2xl tracking-tight" style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}>
+        <span className="text-2xl tracking-tight" style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--accent)' }}>
           Sage
         </span>
         <button
           onClick={onCtaClick}
-          className="text-xs tracking-widest uppercase px-4 py-2 rounded-lg border transition-all duration-300 hover:text-[var(--accent)] hover:border-[var(--accent)]"
+          className="text-xs tracking-widest uppercase px-4 py-2 rounded-lg border transition-all duration-300"
           style={{ borderColor: 'var(--border-bright)', color: 'var(--text-secondary)' }}
+          onMouseEnter={e => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.borderColor = 'var(--accent)'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-secondary)'; e.currentTarget.style.borderColor = 'var(--border-bright)'; }}
         >
           Get Started
         </button>
       </nav>
 
-      {/* ── HERO ── */}
-      <section className="relative min-h-screen flex flex-col items-center justify-center px-6 text-center pt-24 pb-20 overflow-hidden">
-        {/* Slow-moving radial gradient blobs — barely perceptible depth */}
-        <div
-          className="absolute inset-0 pointer-events-none animate-float-gradient"
-          style={{
-            background: 'radial-gradient(ellipse 80% 55% at 50% 65%, rgba(200,184,154,0.055) 0%, transparent 70%)',
-            willChange: 'transform',
-          }}
-        />
-        <div
-          className="absolute inset-0 pointer-events-none"
-          style={{
-            background: 'radial-gradient(ellipse 55% 45% at 25% 35%, rgba(124,58,237,0.065) 0%, transparent 70%)',
-            animation: 'float-gradient 22s ease-in-out infinite reverse',
-            willChange: 'transform',
-          }}
-        />
+      {/* ── HERO — two-column ── */}
+      <section className="relative min-h-screen flex items-center px-6 sm:px-10 lg:px-16 pt-24 pb-16 overflow-hidden">
+        <div className="w-full max-w-7xl mx-auto flex flex-col lg:flex-row items-center gap-10 lg:gap-16">
 
-        <FadeInSection className="relative z-10 flex flex-col items-center gap-7 max-w-4xl">
-          {/* Live badge */}
-          <div
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-full border text-xs tracking-widest uppercase"
-            style={{ background: 'rgba(13,13,20,0.9)', borderColor: 'rgba(200,184,154,0.22)', color: 'var(--text-secondary)' }}
-          >
-            <span
-              className="w-1.5 h-1.5 rounded-full animate-pulse-dot flex-shrink-0"
-              style={{ background: '#00ff88', boxShadow: '0 0 8px rgba(0,255,136,0.55)' }}
-            />
-            AI Interview Coach
+          {/* Left: headline + subtitle + desktop CTA */}
+          <div className="flex flex-col gap-7 lg:flex-1 z-10 order-1">
+            {/* Badge */}
+            <div
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-full border text-xs tracking-widest uppercase self-start"
+              style={{ background: 'rgba(245,158,11,0.07)', borderColor: 'rgba(245,158,11,0.25)', color: '#f59e0b' }}
+            >
+              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0 animate-pulse-dot"
+                style={{ background: '#f59e0b', boxShadow: '0 0 8px rgba(245,158,11,0.55)' }} />
+              AI Interview Coach
+            </div>
+
+            {/* Headline */}
+            <h1
+              className="text-4xl sm:text-5xl lg:text-6xl xl:text-[4.2rem] leading-[1.06] tracking-tight"
+              style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}
+            >
+              The Interview Coach
+              <br />
+              <span className="relative inline-block" style={{ color: 'var(--accent)' }}>
+                That Actually Listens.
+                <svg
+                  className="absolute left-0 w-full pointer-events-none"
+                  style={{ bottom: '-8px', height: '12px' }}
+                  viewBox="0 0 520 12"
+                  preserveAspectRatio="none"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M0,9 C45,3 100,11 170,7 C240,3 295,10 360,6 C425,2 470,9 520,6"
+                    stroke="var(--accent)"
+                    strokeWidth="3"
+                    fill="none"
+                    strokeLinecap="round"
+                    opacity="0.7"
+                  />
+                </svg>
+              </span>
+            </h1>
+
+            {/* Subtitle */}
+            <p className="text-sm sm:text-base leading-relaxed max-w-md" style={{ color: 'var(--text-secondary)' }}>
+              Sage conducts real adaptive voice interviews, follows up on your answers, and
+              delivers a scored evaluation — just like a real interviewer.
+            </p>
+
+            {/* Desktop CTA */}
+            <div className="hidden lg:flex items-center gap-5">
+              <button
+                onClick={onCtaClick}
+                className="btn-shimmer px-8 py-3.5 rounded-lg text-sm tracking-widest uppercase font-medium"
+                style={{ background: '#10b981', color: '#0a0a0a' }}
+              >
+                Start Practicing Free
+              </button>
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>No account · No credit card</span>
+            </div>
           </div>
 
-          {/* Main headline */}
-          <h1
-            className="text-5xl sm:text-6xl md:text-7xl lg:text-[5.25rem] text-[var(--text-primary)] leading-[1.08] tracking-tight"
-            style={{ fontFamily: 'DM Serif Display, serif' }}
-          >
-            Your AI Interview Coach
-            <br />
-            <span className="relative inline-block mt-1">
-              That Actually Listens.
-              {/* Hand-drawn style warm underline */}
-              <svg
-                className="absolute left-0 w-full pointer-events-none"
-                style={{ bottom: '-10px', height: '14px' }}
-                viewBox="0 0 520 14"
-                preserveAspectRatio="none"
-                aria-hidden="true"
-              >
-                <path
-                  d="M0,10 C45,4 100,13 170,8 C240,3 295,12 360,7 C425,2 470,11 520,7"
-                  stroke="var(--accent)"
-                  strokeWidth="2.5"
-                  fill="none"
-                  strokeLinecap="round"
-                  opacity="0.8"
-                />
-              </svg>
-            </span>
-          </h1>
+          {/* Right: demo */}
+          <div className="w-full lg:flex-1 z-10 order-2">
+            <DemoContent />
+          </div>
 
-          {/* Subtitle */}
-          <p className="text-sm sm:text-base leading-relaxed max-w-lg mt-1" style={{ color: 'var(--text-secondary)' }}>
-            Sage conducts real adaptive interviews using your voice. It asks follow-up questions,
-            scores your answers, and delivers a full evaluation — just like a real interviewer.
-          </p>
-
-          {/* CTA */}
-          <div className="flex flex-col sm:flex-row items-center gap-4 mt-1">
+          {/* Mobile CTA — shown below demo */}
+          <div className="flex lg:hidden flex-col items-center gap-3 w-full z-10 order-3">
             <button
               onClick={onCtaClick}
-              className="btn-shimmer px-9 py-3.5 rounded-lg text-sm tracking-widest uppercase font-medium"
-              style={{ background: 'var(--accent)', color: 'var(--bg)' }}
+              className="btn-shimmer w-full max-w-sm py-4 rounded-lg text-sm tracking-widest uppercase font-medium"
+              style={{ background: '#10b981', color: '#0a0a0a' }}
             >
               Start Practicing Free
             </button>
             <span className="text-xs" style={{ color: 'var(--text-muted)' }}>No account · No credit card</span>
           </div>
-
-          {/* Social proof stats */}
-          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 mt-1">
-            <span className="text-[11px] tracking-wide" style={{ color: 'var(--text-muted)' }}>2,400+ sessions completed</span>
-            <span style={{ color: 'var(--text-muted)' }}>·</span>
-            <span className="text-[11px] tracking-wide" style={{ color: 'var(--text-muted)' }}>94% reported feeling more confident</span>
-          </div>
-        </FadeInSection>
-
-        {/* Scroll indicator */}
-        <div className="absolute bottom-10 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 opacity-20 pointer-events-none">
-          <div className="w-px h-8" style={{ background: 'var(--border-bright)' }} />
-          <span className="text-[10px] tracking-widest uppercase" style={{ color: 'var(--text-muted)' }}>scroll</span>
         </div>
       </section>
 
+      {/* ── READINESS SCORE REVEAL ── */}
+      <ReadinessSection />
+
+      {/* ── QUESTION TICKER ── */}
+      <QuestionTicker />
+
       {/* ── HOW IT WORKS ── */}
-      <section className="px-6 py-28 flex flex-col items-center border-t" style={{ borderColor: 'var(--border)' }}>
+      <section className="px-6 py-24 flex flex-col items-center border-t" style={{ borderColor: 'var(--border)' }}>
         <FadeInSection className="flex flex-col items-center gap-14 w-full max-w-5xl">
           <div className="text-center">
-            <p className="text-xs tracking-widest uppercase mb-3" style={{ color: 'var(--accent)' }}>Process</p>
-            <h2
-              className="text-3xl sm:text-4xl"
-              style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}
-            >
+            <p className="text-xs tracking-widest uppercase mb-3" style={{ color: '#f59e0b' }}>Process</p>
+            <h2 className="text-3xl sm:text-4xl" style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}>
               How It Works
             </h2>
           </div>
-
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 w-full">
             {[
-              {
-                step: '01',
-                title: 'Choose your role and level',
-                body: 'Pick the job title and experience level you\'re targeting. Every question is tailored to your exact context.',
-              },
-              {
-                step: '02',
-                title: 'Speak your answers out loud',
-                body: 'Sage listens, adapts in real time, and follows up like a real interviewer — no scripted question lists.',
-              },
-              {
-                step: '03',
-                title: 'Get your weak spots identified',
-                body: 'Receive a full scored evaluation with exact feedback on what fell short and how to fix it.',
-              },
+              { step: '01', title: 'Choose your role and level', body: "Pick the job title and experience level you're targeting. Every question is tailored to your exact context." },
+              { step: '02', title: 'Speak your answers out loud', body: 'Sage listens, adapts in real time, and follows up like a real interviewer — no scripted question lists.' },
+              { step: '03', title: 'Get your weak spots identified', body: 'Receive a full scored evaluation with exact feedback on what fell short and how to fix it.' },
             ].map(({ step, title, body }, i) => (
               <FadeInSection key={step} delay={i * 100}>
-                <div
-                  className="relative overflow-hidden rounded-xl p-7 h-full flex flex-col gap-5 border-t border-r border-b"
+                <div className="relative overflow-hidden rounded-xl p-7 h-full flex flex-col gap-5 border-t border-r border-b"
                   style={{
-                    background: 'var(--surface)',
+                    background: '#141414',
                     borderTopColor: 'var(--border)',
                     borderRightColor: 'var(--border)',
                     borderBottomColor: 'var(--border)',
-                    borderLeft: '2px solid rgba(200,184,154,0.45)',
-                  }}
-                >
-                  {/* Large faded watermark number */}
-                  <span
-                    className="absolute -top-3 right-4 select-none pointer-events-none leading-none"
-                    style={{
-                      fontFamily: 'DM Serif Display, serif',
-                      fontSize: '7rem',
-                      color: 'var(--text-primary)',
-                      opacity: 0.035,
-                    }}
-                    aria-hidden="true"
-                  >
-                    {step}
-                  </span>
-
-                  <span className="text-xs tracking-widest" style={{ color: 'var(--accent)' }}>{step}</span>
-                  <h3 className="text-base leading-snug" style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}>
-                    {title}
-                  </h3>
+                    borderLeft: '2px solid rgba(16,185,129,0.4)',
+                  }}>
+                  <span className="absolute -top-3 right-4 select-none pointer-events-none leading-none"
+                    style={{ fontFamily: 'DM Serif Display, serif', fontSize: '7rem', color: 'var(--accent)', opacity: 0.04 }}
+                    aria-hidden="true">{step}</span>
+                  <span className="text-xs tracking-widest" style={{ color: '#f59e0b' }}>{step}</span>
+                  <h3 className="text-base leading-snug" style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}>{title}</h3>
                   <p className="text-xs leading-relaxed mt-auto" style={{ color: 'var(--text-secondary)' }}>{body}</p>
                 </div>
               </FadeInSection>
@@ -706,43 +1377,28 @@ const LandingPage = memo(function LandingPage({ onCtaClick }: { onCtaClick: () =
         </FadeInSection>
       </section>
 
+      {/* ── EVALUATION REPORT PREVIEW ── */}
+      <MockReportSection />
+
       {/* ── WHAT MAKES SAGE DIFFERENT ── */}
-      <section className="px-6 py-28 flex flex-col items-center border-t" style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}>
+      <section className="px-6 py-24 flex flex-col items-center border-t" style={{ borderColor: 'var(--border)', background: '#111111' }}>
         <FadeInSection className="flex flex-col items-center gap-14 w-full max-w-5xl">
           <div className="text-center">
             <p className="text-xs tracking-widest uppercase mb-3" style={{ color: 'var(--accent)' }}>Why Sage</p>
-            <h2
-              className="text-3xl sm:text-4xl"
-              style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}
-            >
+            <h2 className="text-3xl sm:text-4xl" style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}>
               What Makes Sage Different
             </h2>
           </div>
-
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 w-full">
             {[
-              {
-                title: 'Truly Adaptive',
-                body: "Sage doesn't read from a question bank. It listens to what you actually say and decides what to probe next.",
-                icon: '✦',
-              },
-              {
-                title: 'Voice First',
-                body: "Practice the way you'll actually interview — speaking out loud, not typing into a chat window.",
-                icon: '◉',
-              },
-              {
-                title: 'Real Feedback',
-                body: 'Every answer is scored 0–10 with specific reasoning. No generic advice. No filler.',
-                icon: '◆',
-              },
+              { title: 'Truly Adaptive', body: "Sage doesn't read from a question bank. It listens to what you actually say and decides what to probe next.", icon: '✦' },
+              { title: 'Voice First', body: "Practice the way you'll actually interview — speaking out loud, not typing into a chat window.", icon: '◉' },
+              { title: 'Real Feedback', body: 'Every answer is scored with specific reasoning. No generic advice. No filler.', icon: '◆' },
             ].map(({ title, body, icon }, i) => (
               <FadeInSection key={title} delay={i * 100}>
                 <div className="glass-card rounded-xl p-7 flex flex-col gap-5 h-full">
                   <span className="text-3xl" style={{ color: 'var(--accent)' }}>{icon}</span>
-                  <h3 className="text-base leading-snug" style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}>
-                    {title}
-                  </h3>
+                  <h3 className="text-base leading-snug" style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}>{title}</h3>
                   <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>{body}</p>
                 </div>
               </FadeInSection>
@@ -751,82 +1407,46 @@ const LandingPage = memo(function LandingPage({ onCtaClick }: { onCtaClick: () =
         </FadeInSection>
       </section>
 
-      {/* ── SOCIAL PROOF ── */}
-      <section className="px-6 py-28 flex flex-col items-center border-t" style={{ borderColor: 'var(--border)' }}>
+      {/* ── EARLY ACCESS ── */}
+      <section className="px-6 py-24 flex flex-col items-center border-t" style={{ borderColor: 'var(--border)' }}>
         <FadeInSection className="w-full max-w-lg">
-          <div
-            className="rounded-2xl p-8 flex flex-col gap-5"
-            style={{ background: 'var(--surface)', border: '1px solid var(--border-bright)' }}
-          >
-            {/* Quote mark */}
-            <span
-              className="text-5xl leading-none select-none"
-              style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--accent)', opacity: 0.45 }}
-              aria-hidden="true"
-            >
-              "
-            </span>
-
-            <blockquote
-              className="text-base sm:text-lg leading-relaxed"
-              style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}
-            >
-              I used Sage the night before my interview and it caught weaknesses in my answers
-              I didn't even realize I had.
-            </blockquote>
-
-            {/* Author row */}
-            <div className="flex items-center gap-3 pt-2 border-t" style={{ borderColor: 'var(--border)' }}>
-              {/* Avatar */}
-              <div
-                className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-medium flex-shrink-0"
-                style={{ background: 'linear-gradient(135deg, var(--accent-dim), var(--accent))', color: 'var(--bg)' }}
-              >
-                SK
-              </div>
-              <div className="flex flex-col">
-                <span className="text-sm" style={{ color: 'var(--text-primary)' }}>Sarah K.</span>
-                <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>Software Developer</span>
-              </div>
-              {/* Verified badge */}
-              <div
-                className="ml-auto flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] tracking-wide"
-                style={{
-                  background: 'rgba(76,175,125,0.1)',
-                  color: 'var(--green)',
-                  border: '1px solid rgba(76,175,125,0.2)',
-                }}
-              >
-                <span>✓</span>
-                <span>Verified</span>
-              </div>
+          <div className="rounded-2xl p-8 flex flex-col gap-5"
+            style={{ background: '#141414', border: '1px solid rgba(200,184,154,0.15)' }}>
+            <div className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: 'var(--accent)' }} />
+              <span className="text-xs tracking-widest uppercase" style={{ color: 'var(--accent)' }}>Early Access</span>
             </div>
+            <h3 className="text-2xl sm:text-3xl leading-snug"
+              style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}>
+              Sage is new. Be one of the first to use it.
+            </h3>
+            <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+              We're actively improving Sage based on real sessions. Your feedback directly shapes
+              what gets built next — new interview types, deeper feedback, and industry-specific question sets.
+            </p>
+            <p className="text-xs leading-relaxed pt-2 border-t"
+              style={{ color: 'var(--text-muted)', borderColor: 'rgba(200,184,154,0.09)' }}>
+              No account required. Just start a session and tell us what you think.
+            </p>
           </div>
         </FadeInSection>
       </section>
 
       {/* ── FINAL CTA ── */}
-      <section className="relative px-6 py-28 flex flex-col items-center border-t overflow-hidden" style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}>
-        {/* Centered radial glow */}
-        <div
-          className="absolute inset-0 pointer-events-none"
-          style={{ background: 'radial-gradient(ellipse 70% 60% at 50% 50%, rgba(200,184,154,0.07) 0%, transparent 70%)' }}
-        />
+      <section className="relative px-6 py-24 flex flex-col items-center border-t overflow-hidden"
+        style={{ borderColor: 'var(--border)', background: '#111111' }}>
         <FadeInSection className="relative z-10 flex flex-col items-center gap-6 max-w-xl text-center">
-          <h2
-            className="text-3xl sm:text-4xl md:text-5xl leading-tight tracking-tight"
-            style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}
-          >
+          <h2 className="text-3xl sm:text-4xl md:text-5xl leading-tight tracking-tight"
+            style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-primary)' }}>
             Stop rehearsing.<br />Start performing.
           </h2>
           <p className="text-sm leading-relaxed max-w-sm" style={{ color: 'var(--text-secondary)' }}>
-            One session is enough to know exactly what you need to work on.
-            No signup, no credit card.
+            One session is enough to know exactly what you need to work on. No signup, no credit card.
           </p>
           <button
             onClick={onCtaClick}
             className="btn-shimmer mt-2 px-9 py-3.5 rounded-lg text-sm tracking-widest uppercase font-medium"
-            style={{ background: 'var(--accent)', color: 'var(--bg)' }}
+            style={{ background: '#10b981', color: '#0a0a0a' }}
           >
             Start Your Free Session
           </button>
@@ -835,9 +1455,7 @@ const LandingPage = memo(function LandingPage({ onCtaClick }: { onCtaClick: () =
 
       {/* ── FOOTER ── */}
       <footer className="border-t px-6 py-8 flex items-center justify-between" style={{ borderColor: 'var(--border)' }}>
-        <span className="text-sm" style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-muted)' }}>
-          Sage
-        </span>
+        <span className="text-sm" style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--text-muted)' }}>Sage</span>
         <span className="text-xs" style={{ color: 'var(--text-muted)' }}>AI-powered interview practice</span>
       </footer>
     </>
@@ -857,6 +1475,7 @@ export default function Home() {
   const [error, setError] = useState('');
   const [loadingMsg, setLoadingMsg] = useState('');
   const [showForm, setShowForm] = useState(false);
+  const [showReadyScreen, setShowReadyScreen] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [currentQuestion, setCurrentQuestion] = useState('');
   const [topicAreas, setTopicAreas] = useState<any[]>([]);
@@ -1218,6 +1837,56 @@ IMPORTANT: Begin the interview immediately when the session starts. Say a brief 
     }
   }, [realtimeSession]);
 
+  // Intercepts the form's onStart.
+  // Desktop → calls handleStart immediately (existing behaviour, unchanged).
+  // Mobile  → stores the form values and shows the ReadyScreen overlay instead,
+  //           so the user can unlock audio in their own tap before Vapi starts.
+  const handleFormSubmit = useCallback((
+    formRole: string,
+    formExpLevel: ExperienceLevel,
+    formIntType: InterviewType,
+  ) => {
+    const isMobileDevice =
+      /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ||
+      window.innerWidth < 768 ||
+      ('ontouchstart' in window);
+
+    setShowForm(false);
+
+    if (isMobileDevice) {
+      // Stash values so ReadyScreen and handleReadyBegin can read them from state
+      setRole(formRole);
+      setExperienceLevel(formExpLevel);
+      setInterviewType(formIntType);
+      setShowReadyScreen(true);
+    } else {
+      handleStart(formRole, formExpLevel, formIntType);
+    }
+  }, [handleStart]);
+
+  // Called by the "I'm Ready" button on the ReadyScreen.
+  // The AudioContext warm-up runs synchronously in the same click event, which
+  // is the requirement for iOS to grant audio permission without a second gesture.
+  const handleReadyBegin = useCallback(() => {
+    try {
+      const AudioCtx =
+        (window.AudioContext || (window as any).webkitAudioContext) as
+        (typeof AudioContext) | undefined;
+      if (AudioCtx) {
+        const ctx = new AudioCtx();
+        const buf = ctx.createBuffer(1, 1, 22050);
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.connect(ctx.destination);
+        src.start(0);
+      }
+    } catch (_) { /* non-fatal — Vapi requests permission itself if needed */ }
+
+    setShowReadyScreen(false);
+    // role/experienceLevel/interviewType were stored when handleFormSubmit ran
+    handleStart(role, experienceLevel, interviewType);
+  }, [handleStart, role, experienceLevel, interviewType]);
+
   const handleRestart = () => {
     cancel();
     realtimeSession.disconnect();
@@ -1231,6 +1900,7 @@ IMPORTANT: Begin the interview immediately when the session starts. Say a brief 
     setTranscript('');
     setError('');
     setShowForm(false);
+    setShowReadyScreen(false);
     agentStateRef.current = null;
   };
 
@@ -1247,13 +1917,25 @@ IMPORTANT: Begin the interview immediately when the session starts. Say a brief 
           {/* Always mounted — visibility toggled with CSS to avoid mount cost on click */}
           <InterviewForm
             isVisible={showForm}
-            onStart={handleStart}
+            onStart={handleFormSubmit}
             onClose={handleHideForm}
             unlockAudio={unlockAudio}
             isSupported={isSupported}
             error={error}
           />
         </>
+      )}
+
+      {/* ── READY SCREEN (mobile only) ── */}
+      {/* Rendered as a fixed overlay independently of appPhase so it can sit
+          between the form close and the loading phase starting. */}
+      {showReadyScreen && (
+        <ReadyScreen
+          role={role}
+          experienceLevel={experienceLevel}
+          interviewType={interviewType}
+          onBegin={handleReadyBegin}
+        />
       )}
 
       {/* ── LOADING ── */}
@@ -1283,20 +1965,21 @@ IMPORTANT: Begin the interview immediately when the session starts. Say a brief 
 
           {realtimeSession.topicAreas.length > 0 && <ProgressTracker areas={realtimeSession.topicAreas} />}
 
-          <div className="flex flex-col items-center">
-            <WaveOrb status={realtimeSession.isSageSpeaking ? 'speaking' : realtimeSession.isUserSpeaking ? 'listening' : 'idle'} />
-            <StatusLabel status={realtimeSession.isSageSpeaking ? 'speaking' : realtimeSession.isUserSpeaking ? 'listening' : 'idle'} />
-
-            {/* Silence indicator - show when user was speaking but stopped */}
-            {!realtimeSession.isSageSpeaking && !realtimeSession.isUserSpeaking && realtimeSession.currentTranscript && (
-              <div className="mt-2 flex items-center gap-2 animate-pulse">
-                <div className="w-2 h-2 rounded-full bg-[var(--yellow)]" />
-                <p className="text-xs text-[var(--yellow)] tracking-widest uppercase">
-                  Processing...
-                </p>
+          {(() => {
+            const orbStatus = realtimeSession.isSageSpeaking
+              ? 'speaking'
+              : realtimeSession.isUserSpeaking
+              ? 'listening'
+              : realtimeSession.currentTranscript
+              ? 'processing'
+              : 'idle';
+            return (
+              <div className="flex flex-col items-center">
+                <LiveOrb status={orbStatus} volume={realtimeSession.volumeLevel} />
+                <StatusLabel status={orbStatus} />
               </div>
-            )}
-          </div>
+            );
+          })()}
 
           {realtimeSession.currentQuestion && (
             <div className="w-full border border-[var(--border)] rounded-lg p-4 bg-[var(--surface)] animate-slide-up">

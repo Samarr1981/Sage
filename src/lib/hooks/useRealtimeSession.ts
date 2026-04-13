@@ -49,6 +49,9 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
   const [currentTranscript, setCurrentTranscript] = useState('');
   const [currentQuestion, setCurrentQuestion] = useState('');
 
+  // ── Volume level (0-1, from Vapi volume-level event) ─────────────────────
+  const [volumeLevel, setVolumeLevel] = useState(0);
+
   // ── Interview tracking state ──────────────────────────────────────────────
   const [topicAreas, setTopicAreas] = useState<TopicArea[]>([]);
   const [exchanges, setExchanges] = useState<ExchangeRecord[]>([]);
@@ -125,6 +128,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
       setStatus('disconnected');
       setIsSageSpeaking(false);
       setIsUserSpeaking(false);
+      setVolumeLevel(0);
       optionsRef.current.onInterviewComplete?.();
     });
 
@@ -221,6 +225,11 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
       }
     });
 
+    // ── volume-level: mic/speaker volume for orb reactivity ─────────────
+    vapi.on('volume-level', (level: number) => {
+      setVolumeLevel(level);
+    });
+
     // ── error ─────────────────────────────────────────────────────────────
     vapi.on('error', (e: any) => {
       const msg = e?.message ?? e?.error?.message ?? (typeof e === 'string' ? e : JSON.stringify(e)) ?? 'Vapi error';
@@ -294,6 +303,7 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
     topicAreas,
     exchanges,
     currentAreaIndex,
+    volumeLevel,
     connect,
     disconnect,
     startAudioCapture,
