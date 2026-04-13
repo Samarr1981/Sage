@@ -130,16 +130,31 @@ function FeedbackBadge({ quality }: { quality: string | null }) {
 function EvaluationScreen({ evaluation, role, exchanges, onRestart }: {
   evaluation: FinalEvaluation;
   role: string;
-  exchanges: { answer: string }[];
+  exchanges: { question: string; answer: string }[];
   onRestart: () => void;
 }) {
-  // A session is "short" when the score is below 50 (overallScore < 5 on a 0–10 scale)
-  // AND the total answer word-count across all exchanges is under 100 words.
+  // ── Early-exit guard ────────────────────────────────────────────────────
+  // Fires when the session was cut short before meaningful data was collected.
+  // Condition: total transcript chars < 1000  OR  fewer than 5 assistant turns.
+  // Either threshold alone is enough — we don't require both.
+  const totalTranscriptChars = exchanges.reduce(
+    (sum, e) => sum + e.question.length + e.answer.length,
+    0,
+  );
+  const assistantMessageCount = exchanges.length; // each exchange = one Q&A turn
+  const isEarlyExit = totalTranscriptChars < 1000 || assistantMessageCount < 5;
+
+  // ── Short-session guard (score-based, secondary) ────────────────────────
+  // Fires when the score is low AND answers were thin — catches cases where the
+  // user spoke enough turns but said very little in each.
   const totalAnswerWords = exchanges.reduce(
     (sum, e) => sum + e.answer.trim().split(/\s+/).filter(Boolean).length,
     0,
   );
-  const isShortSession = evaluation.overallScore < 5 && totalAnswerWords < 100;
+  const isShortSession = !isEarlyExit && evaluation.overallScore < 5 && totalAnswerWords < 100;
+
+  // Either flag suppresses Communication Gaps in favour of Potential
+  const suppressGaps = isEarlyExit || isShortSession;
 
   return (
     <div className="w-full max-w-lg animate-fade-in flex flex-col gap-6 py-12">
@@ -149,8 +164,20 @@ function EvaluationScreen({ evaluation, role, exchanges, onRestart }: {
           Interview Assessment — {role}
         </p>
 
-        {isShortSession ? (
-          /* Session Incomplete badge — shown instead of the readiness percentage */
+        {isEarlyExit ? (
+          /* ── Session Summary badge: early exit ─────────────────────── */
+          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full border text-sm tracking-wide"
+            style={{
+              borderColor: 'var(--yellow)',
+              color: 'var(--yellow)',
+              background: 'rgba(212,168,67,0.08)',
+            }}>
+            <span className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+              style={{ background: 'var(--yellow)' }} />
+            Session Summary
+          </div>
+        ) : isShortSession ? (
+          /* ── Session Incomplete badge: low score + thin answers ─────── */
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full border text-sm tracking-wide"
             style={{
               borderColor: 'var(--yellow)',
@@ -162,18 +189,27 @@ function EvaluationScreen({ evaluation, role, exchanges, onRestart }: {
             Session Incomplete
           </div>
         ) : (
+          /* ── Full readiness percentage ─────────────────────────────── */
           <div className="text-5xl font-light text-[var(--accent)] mb-1"
             style={{ fontFamily: 'DM Serif Display, serif' }}>
             {evaluation.readinessRating}
           </div>
         )}
 
-        <p className="text-sm text-[var(--text-secondary)] leading-relaxed mt-3">
-          {evaluation.summary}
-        </p>
+        {isEarlyExit ? (
+          /* Early-exit message replaces the LLM summary */
+          <p className="text-sm text-[var(--text-secondary)] leading-relaxed mt-3">
+            The session ended prematurely. For a full score and deep-dive feedback,
+            please complete at least 5–10 minutes of the interview.
+          </p>
+        ) : (
+          <p className="text-sm text-[var(--text-secondary)] leading-relaxed mt-3">
+            {evaluation.summary}
+          </p>
+        )}
       </div>
 
-      {/* Area scores */}
+      {/* Area scores — shown for all session types */}
       <div className="border border-[var(--border)] rounded-lg overflow-hidden">
         <div className="px-4 py-3 border-b border-[var(--border)] bg-[var(--surface)]">
           <p className="text-xs text-[var(--text-secondary)] tracking-widest uppercase">
@@ -198,8 +234,8 @@ function EvaluationScreen({ evaluation, role, exchanges, onRestart }: {
         ))}
       </div>
 
-      {/* Potential (short session) — shown instead of Communication Gaps */}
-      {isShortSession && evaluation.strengths.length > 0 && (
+      {/* Potential — replaces Communication Gaps for short / early-exit sessions */}
+      {suppressGaps && evaluation.strengths.length > 0 && (
         <div className="border rounded-lg p-4"
           style={{ borderColor: 'var(--yellow)', background: 'rgba(212,168,67,0.05)' }}>
           <p className="text-xs tracking-widest uppercase mb-3" style={{ color: 'var(--yellow)' }}>
@@ -218,8 +254,8 @@ function EvaluationScreen({ evaluation, role, exchanges, onRestart }: {
         </div>
       )}
 
-      {/* What You Did Well (full session only) */}
-      {!isShortSession && evaluation.strengths.length > 0 && (
+      {/* What You Did Well — full sessions only */}
+      {!suppressGaps && evaluation.strengths.length > 0 && (
         <div className="border border-[var(--border)] rounded-lg p-4">
           <p className="text-xs text-[var(--green)] tracking-widest uppercase mb-3">
             What You Did Well
@@ -234,8 +270,8 @@ function EvaluationScreen({ evaluation, role, exchanges, onRestart }: {
         </div>
       )}
 
-      {/* Communication Gaps — suppressed for short sessions */}
-      {!isShortSession && evaluation.weakMoments?.length > 0 && (
+      {/* Communication Gaps — full sessions only */}
+      {!suppressGaps && evaluation.weakMoments?.length > 0 && (
         <div className="border border-[var(--border)] rounded-lg overflow-hidden">
           <div className="px-4 py-3 border-b border-[var(--border)] bg-[var(--surface)]">
             <p className="text-xs text-[var(--red)] tracking-widest uppercase">
@@ -257,7 +293,7 @@ function EvaluationScreen({ evaluation, role, exchanges, onRestart }: {
         </div>
       )}
 
-      {/* Recommendation */}
+      {/* Recommendation — always shown */}
       <div className="border border-[var(--border-bright)] rounded-lg p-4 bg-[var(--glow)]">
         <p className="text-xs text-[var(--accent)] tracking-widest uppercase mb-2">
           Top Priority
