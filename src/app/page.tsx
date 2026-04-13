@@ -1096,10 +1096,16 @@ When ALL completion rules are met, say: "That wraps up our interview today. Than
 IMPORTANT: Begin the interview immediately when the session starts. Say a brief greeting like "Hi, I'm Sage. Let's get started." and then ask your first question about ${topicAreas[0].name}. Do not wait for the candidate to speak first.`;
 
       const t3 = performance.now();
-      console.log(`[TIMING] handleStart: Connecting to Realtime API at ${t3.toFixed(2)}ms`);
+      console.log(`[TIMING] handleStart: Connecting to Vapi at ${t3.toFixed(2)}ms`);
 
-      // Connect to Realtime API with system prompt - this waits for session.updated
-      await realtimeSession.connect(systemPrompt);
+      // Start Vapi call — system prompt lives in the assistant dashboard config;
+      // we pass dynamic values (role, level, type) as variable overrides so the
+      // assistant can personalise the interview without a code change.
+      await realtimeSession.connect(systemPrompt, {
+        topic: formRole,
+        level: formExpLevel,
+        interviewType: formIntType,
+      });
 
       const t4 = performance.now();
       console.log(`[TIMING] handleStart: Realtime session ready at ${t4.toFixed(2)}ms (+${(t4-t3).toFixed(2)}ms)`);
