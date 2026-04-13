@@ -249,12 +249,8 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
       interviewType: variables?.interviewType ?? '',
     };
 
-    // Build overrides — always force firstMessage/mode so Sage speaks first
-    // regardless of dashboard configuration.
     const overrides: any = {
       variableValues,
-      firstMessage: "Hi, I'm Sage. Let's begin.",
-      firstMessageMode: 'assistant-speaks-first',
     };
 
     // Pass the full system prompt directly so the app works without relying
