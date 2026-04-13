@@ -1868,21 +1868,20 @@ IMPORTANT: Begin the interview immediately when the session starts. Say a brief 
   // The AudioContext warm-up runs synchronously in the same click event, which
   // is the requirement for iOS to grant audio permission without a second gesture.
   const handleReadyBegin = useCallback(async () => {
-    // Request mic permission explicitly inside the click handler.
-    // On iOS, getUserMedia inside a user gesture unlocks WebRTC audio autoplay
-    // for the session — this is the correct unlock mechanism, not AudioContext.
+    // Grant mic permission inside the click handler so iOS unlocks WebRTC
+    // audio output for this session. Stop the tracks immediately after —
+    // Vapi calls its own getUserMedia internally and cannot share a live
+    // stream. A concurrent active stream on iOS silently breaks Vapi's
+    // mic acquisition, causing the assistant to never speak.
+    // iOS caches the granted permission, so stopping here does not re-prompt.
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      // Keep the stream alive; Vapi will take over the mic track internally.
-      // Stopping it here would re-prompt on some iOS versions.
-      void stream;
+      stream.getTracks().forEach(t => t.stop());
     } catch (_) {
-      // Permission denied or unavailable — proceed anyway and let Vapi
-      // surface the error through its own error event.
+      // Denied or unavailable — proceed and let Vapi surface its own error.
     }
 
     setShowReadyScreen(false);
-    // role/experienceLevel/interviewType were stored when handleFormSubmit ran
     handleStart(role, experienceLevel, interviewType);
   }, [handleStart, role, experienceLevel, interviewType]);
 
