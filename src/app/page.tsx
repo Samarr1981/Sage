@@ -1796,7 +1796,7 @@ Completion Rules (ALL must be true before concluding):
 
 When ALL completion rules are met, say: "That wraps up our interview today. Thank you for your time." This signals the end.
 
-IMPORTANT: Begin the interview immediately when the session starts. Say a brief greeting like "Hi, I'm Sage. Let's get started." and then ask your first question about ${topicAreas[0].name}. Do not wait for the candidate to speak first.`;
+IMPORTANT: Begin the interview immediately when the session starts. Ask your first question about ${topicAreas[0].name} right after your opening greeting. Do not wait for the candidate to speak first.`;
 
       const t3 = performance.now();
       console.log(`[TIMING] handleStart: Connecting to Vapi at ${t3.toFixed(2)}ms`);
@@ -1908,7 +1908,7 @@ Completion Rules (ALL must be true before concluding):
 
 When ALL completion rules are met, say: "That wraps up our interview today. Thank you for your time." This signals the end.
 
-IMPORTANT: Begin the interview immediately when the session starts. Say a brief greeting like "Hi, I'm Sage. Let's get started." and then ask your first question about ${areas[0].name}. Do not wait for the candidate to speak first.`;
+IMPORTANT: Begin the interview immediately when the session starts. Ask your first question about ${areas[0].name} right after your opening greeting. Do not wait for the candidate to speak first.`;
         return { topicAreas: areas, systemPrompt: prompt };
       });
 
