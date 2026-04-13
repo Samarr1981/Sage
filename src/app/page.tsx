@@ -1867,20 +1867,19 @@ IMPORTANT: Begin the interview immediately when the session starts. Say a brief 
   // Called by the "I'm Ready" button on the ReadyScreen.
   // The AudioContext warm-up runs synchronously in the same click event, which
   // is the requirement for iOS to grant audio permission without a second gesture.
-  const handleReadyBegin = useCallback(() => {
+  const handleReadyBegin = useCallback(async () => {
+    // Request mic permission explicitly inside the click handler.
+    // On iOS, getUserMedia inside a user gesture unlocks WebRTC audio autoplay
+    // for the session — this is the correct unlock mechanism, not AudioContext.
     try {
-      const AudioCtx =
-        (window.AudioContext || (window as any).webkitAudioContext) as
-        (typeof AudioContext) | undefined;
-      if (AudioCtx) {
-        const ctx = new AudioCtx();
-        const buf = ctx.createBuffer(1, 1, 22050);
-        const src = ctx.createBufferSource();
-        src.buffer = buf;
-        src.connect(ctx.destination);
-        src.start(0);
-      }
-    } catch (_) { /* non-fatal — Vapi requests permission itself if needed */ }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Keep the stream alive; Vapi will take over the mic track internally.
+      // Stopping it here would re-prompt on some iOS versions.
+      void stream;
+    } catch (_) {
+      // Permission denied or unavailable — proceed anyway and let Vapi
+      // surface the error through its own error event.
+    }
 
     setShowReadyScreen(false);
     // role/experienceLevel/interviewType were stored when handleFormSubmit ran
