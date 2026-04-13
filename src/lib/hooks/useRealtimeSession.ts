@@ -86,11 +86,12 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
 
   // ── Connect — starts a Vapi call ─────────────────────────────────────────
   //
-  // _systemPrompt is accepted for API compatibility but ignored: the interview
-  // system prompt lives in the Vapi assistant dashboard configuration.
-  // variables are injected at call time via assistantOverrides.variableValues.
+  // systemPrompt is injected directly as a model-messages override so the app
+  // is self-contained and doesn't depend on the Vapi dashboard system prompt.
+  // variables are also injected via assistantOverrides.variableValues for any
+  // {{template}} placeholders still in the dashboard config.
   const connect = useCallback(async (
-    _systemPrompt?: string,
+    systemPrompt?: string,
     variables?: VapiSessionVariables,
   ): Promise<void> => {
     const publicKey = process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY;
@@ -247,9 +248,29 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
       level: variables?.level ?? '',
       interviewType: variables?.interviewType ?? '',
     };
-    console.log('[Vapi] Starting call with variableValues:', variableValues);
+
+    // Build overrides — always force firstMessage/mode so Sage speaks first
+    // regardless of dashboard configuration.
+    const overrides: any = {
+      variableValues,
+      firstMessage: "Hi, I'm Sage. Let's begin.",
+      firstMessageMode: 'assistant-speaks-first',
+    };
+
+    // Pass the full system prompt directly so the app works without relying
+    // on the Vapi dashboard assistant's system prompt configuration.
+    if (systemPrompt) {
+      overrides.model = {
+        provider: 'openai',
+        model: 'gpt-4o',
+        messages: [{ role: 'system', content: systemPrompt }],
+        temperature: 0.8,
+      };
+    }
+
+    console.log('[Vapi] Starting call with overrides:', JSON.stringify({ variableValues, firstMessage: overrides.firstMessage }));
     try {
-      await vapi.start(VAPI_ASSISTANT_ID, { variableValues } as any);
+      await vapi.start(VAPI_ASSISTANT_ID, overrides);
     } catch (err: any) {
       const msg = err?.message ?? (typeof err === 'string' ? err : JSON.stringify(err)) ?? 'Failed to start Vapi call';
       console.error('[Vapi] Start error:', JSON.stringify(err));

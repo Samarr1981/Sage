@@ -1482,6 +1482,9 @@ export default function Home() {
 
   const agentStateRef = useRef<ExaminerState | null>(null);
   const isMobile = useRef(false);
+  // Mobile pre-fetch: stores the initialization promise so handleReadyBegin
+  // can await it without a network round-trip inside the gesture handler.
+  const mobileInitPromiseRef = useRef<Promise<{ topicAreas: any[]; systemPrompt: string }> | null>(null);
 
   useEffect(() => {
     isMobile.current =
@@ -1858,32 +1861,110 @@ IMPORTANT: Begin the interview immediately when the session starts. Say a brief 
       setRole(formRole);
       setExperienceLevel(formExpLevel);
       setInterviewType(formIntType);
+
+      // Pre-fetch topic areas NOW while the ReadyScreen is displayed.
+      // This way handleReadyBegin can start Vapi immediately after the user
+      // taps "I'm Ready" — no network round-trip inside the gesture handler,
+      // which would invalidate iOS's user-gesture audio context.
+      const topic = `${formRole} — ${formIntType} interview — ${formExpLevel} level`;
+      mobileInitPromiseRef.current = fetch('/api/realtime/initialize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic }),
+      }).then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+        const areas = data.topicAreas;
+        const areasList = areas.map((a: any, i: number) => `${i+1}. ${a.name}`).join('\n');
+        const prompt = `You are Sage, a senior interviewer at a top tech company conducting a ${formIntType} interview for a ${formRole} position. The candidate's experience level is ${formExpLevel}.
+
+Your task is to assess the candidate's knowledge across these 3 areas:
+${areasList}
+
+Interview Guidelines:
+- Ask ONE question at a time and wait for the candidate to finish speaking before responding
+- Start with the first area and progress naturally through all three
+- MANDATORY: Ask at least 2 questions per topic area before moving to the next area
+- MANDATORY: Cover ALL 3 topic areas before concluding the interview
+- If a candidate's answer is under 15 words, it is incomplete — ask them to elaborate or provide more detail
+- Strong answers: acknowledge briefly and ask one more question in this area before moving on
+- Medium answers: ask ONE clarifying follow-up to probe deeper
+- Weak answers: ask a more foundational question to assess basics
+- Transition naturally between areas (e.g., "Let's talk about [next area]...")
+- Total interview should be 6-8 questions across all 3 areas
+
+Be conversational and human-like:
+- Short, direct questions (max 2 sentences)
+- Never start with "Can you", "Could you", "Would you mind"
+- Avoid filler words like "elaborate", "explain in detail", "walk me through"
+- Sound like a real interviewer, not a chatbot
+- No encouragement or praise - stay professional and neutral
+
+Completion Rules (ALL must be true before concluding):
+1. You have covered ALL 3 topic areas
+2. You have asked at least 2 questions per topic area
+3. The candidate has provided substantive answers (not just 1-2 word responses)
+4. You have asked a total of at least 6 questions
+
+When ALL completion rules are met, say: "That wraps up our interview today. Thank you for your time." This signals the end.
+
+IMPORTANT: Begin the interview immediately when the session starts. Say a brief greeting like "Hi, I'm Sage. Let's get started." and then ask your first question about ${areas[0].name}. Do not wait for the candidate to speak first.`;
+        return { topicAreas: areas, systemPrompt: prompt };
+      });
+
       setShowReadyScreen(true);
     } else {
       handleStart(formRole, formExpLevel, formIntType);
     }
   }, [handleStart]);
 
-  // Called by the "I'm Ready" button on the ReadyScreen.
-  // The AudioContext warm-up runs synchronously in the same click event, which
-  // is the requirement for iOS to grant audio permission without a second gesture.
+  // Called by the "I'm Ready" button on the ReadyScreen (mobile only).
+  // IMPORTANT: iOS requires that both getUserMedia AND vapi.start() happen
+  // within the same user-gesture context. We pre-fetched the topic areas in
+  // handleFormSubmit so there's no network request here — only the permission
+  // prompt and the Vapi call, which stay inside the gesture chain.
   const handleReadyBegin = useCallback(async () => {
-    // Grant mic permission inside the click handler so iOS unlocks WebRTC
-    // audio output for this session. Stop the tracks immediately after —
-    // Vapi calls its own getUserMedia internally and cannot share a live
-    // stream. A concurrent active stream on iOS silently breaks Vapi's
-    // mic acquisition, causing the assistant to never speak.
-    // iOS caches the granted permission, so stopping here does not re-prompt.
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach(t => t.stop());
-    } catch (_) {
-      // Denied or unavailable — proceed and let Vapi surface its own error.
-    }
-
     setShowReadyScreen(false);
-    handleStart(role, experienceLevel, interviewType);
-  }, [handleStart, role, experienceLevel, interviewType]);
+    setAppPhase('loading');
+    setLoadingMsg('Connecting to Sage...');
+
+    try {
+      // Wait for the pre-fetched initialization data
+      const initData = await (mobileInitPromiseRef.current ?? Promise.reject(new Error('No init data')));
+      const { topicAreas: areas, systemPrompt } = initData;
+
+      // Commit interview setup to state
+      realtimeSession.initializeInterview(areas);
+      setTopicAreas(areas);
+
+      // Unlock iOS WebRTC audio output — must happen inside the gesture chain
+      // (which we preserve because the only await above is a pre-resolved or
+      // nearly-resolved fetch promise, not a new network request).
+      // Stop the tracks immediately: Vapi calls its own getUserMedia internally
+      // and a concurrent live stream silently blocks its mic acquisition on iOS.
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach(t => t.stop());
+      } catch (_) {
+        // Permission denied or unavailable — let Vapi surface its own error.
+      }
+
+      // Start Vapi — this is now close enough to the gesture that iOS allows it
+      await realtimeSession.connect(systemPrompt, {
+        topic: role,
+        level: experienceLevel,
+        interviewType,
+      });
+
+      setAppPhase('session');
+      await realtimeSession.startAudioCapture();
+    } catch (err: any) {
+      console.error('[handleReadyBegin Error]', err);
+      setError(err.message || 'Failed to start. Please try again.');
+      setAppPhase('landing');
+      setShowForm(true);
+    }
+  }, [realtimeSession, role, experienceLevel, interviewType]);
 
   const handleRestart = () => {
     cancel();
