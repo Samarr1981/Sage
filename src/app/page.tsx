@@ -127,11 +127,20 @@ function FeedbackBadge({ quality }: { quality: string | null }) {
   );
 }
 
-function EvaluationScreen({ evaluation, role, onRestart }: {
+function EvaluationScreen({ evaluation, role, exchanges, onRestart }: {
   evaluation: FinalEvaluation;
   role: string;
+  exchanges: { answer: string }[];
   onRestart: () => void;
 }) {
+  // A session is "short" when the score is below 50 (overallScore < 5 on a 0–10 scale)
+  // AND the total answer word-count across all exchanges is under 100 words.
+  const totalAnswerWords = exchanges.reduce(
+    (sum, e) => sum + e.answer.trim().split(/\s+/).filter(Boolean).length,
+    0,
+  );
+  const isShortSession = evaluation.overallScore < 5 && totalAnswerWords < 100;
+
   return (
     <div className="w-full max-w-lg animate-fade-in flex flex-col gap-6 py-12">
       {/* Header */}
@@ -139,10 +148,26 @@ function EvaluationScreen({ evaluation, role, onRestart }: {
         <p className="text-xs text-[var(--text-secondary)] tracking-widest uppercase mb-2">
           Interview Assessment — {role}
         </p>
-        <div className="text-5xl font-light text-[var(--accent)] mb-1"
-          style={{ fontFamily: 'DM Serif Display, serif' }}>
-          {evaluation.readinessRating}
-        </div>
+
+        {isShortSession ? (
+          /* Session Incomplete badge — shown instead of the readiness percentage */
+          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full border text-sm tracking-wide"
+            style={{
+              borderColor: 'var(--yellow)',
+              color: 'var(--yellow)',
+              background: 'rgba(212,168,67,0.08)',
+            }}>
+            <span className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+              style={{ background: 'var(--yellow)' }} />
+            Session Incomplete
+          </div>
+        ) : (
+          <div className="text-5xl font-light text-[var(--accent)] mb-1"
+            style={{ fontFamily: 'DM Serif Display, serif' }}>
+            {evaluation.readinessRating}
+          </div>
+        )}
+
         <p className="text-sm text-[var(--text-secondary)] leading-relaxed mt-3">
           {evaluation.summary}
         </p>
@@ -173,8 +198,28 @@ function EvaluationScreen({ evaluation, role, onRestart }: {
         ))}
       </div>
 
-      {/* Strengths */}
-      {evaluation.strengths.length > 0 && (
+      {/* Potential (short session) — shown instead of Communication Gaps */}
+      {isShortSession && evaluation.strengths.length > 0 && (
+        <div className="border rounded-lg p-4"
+          style={{ borderColor: 'var(--yellow)', background: 'rgba(212,168,67,0.05)' }}>
+          <p className="text-xs tracking-widest uppercase mb-3" style={{ color: 'var(--yellow)' }}>
+            Potential
+          </p>
+          <p className="text-xs text-[var(--text-secondary)] mb-3 leading-relaxed">
+            The session was too brief for a full assessment, but here's what stood out:
+          </p>
+          <ul className="flex flex-col gap-2">
+            {evaluation.strengths.map((s, i) => (
+              <li key={i} className="text-xs text-[var(--text-secondary)] flex gap-2">
+                <span style={{ color: 'var(--yellow)' }}>◆</span> {s}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* What You Did Well (full session only) */}
+      {!isShortSession && evaluation.strengths.length > 0 && (
         <div className="border border-[var(--border)] rounded-lg p-4">
           <p className="text-xs text-[var(--green)] tracking-widest uppercase mb-3">
             What You Did Well
@@ -189,12 +234,12 @@ function EvaluationScreen({ evaluation, role, onRestart }: {
         </div>
       )}
 
-      {/* Weak moments */}
-      {evaluation.weakMoments?.length > 0 && (
+      {/* Communication Gaps — suppressed for short sessions */}
+      {!isShortSession && evaluation.weakMoments?.length > 0 && (
         <div className="border border-[var(--border)] rounded-lg overflow-hidden">
           <div className="px-4 py-3 border-b border-[var(--border)] bg-[var(--surface)]">
             <p className="text-xs text-[var(--red)] tracking-widest uppercase">
-              Weak Moments
+              Communication Gaps
             </p>
           </div>
           {evaluation.weakMoments.map((moment, i) => (
@@ -1253,6 +1298,7 @@ IMPORTANT: Begin the interview immediately when the session starts. Say a brief 
         <EvaluationScreen
           evaluation={agentState.finalEvaluation}
           role={role}
+          exchanges={realtimeSession.exchanges}
           onRestart={handleRestart}
         />
       )}
