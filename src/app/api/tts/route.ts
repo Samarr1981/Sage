@@ -1,11 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { auth } from '@clerk/nextjs/server';
 import OpenAI from 'openai';
+import { checkRateLimit } from '@/lib/rateLimit';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
 export async function POST(req: NextRequest) {
+  const { userId } = await auth();
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  if (!checkRateLimit(userId)) {
+    return NextResponse.json({ error: 'Rate limit exceeded. Try again in a minute.' }, { status: 429 });
+  }
+
   try {
     const t0 = Date.now();
     console.log(`[TIMING] TTS API: Request received at ${t0}`);

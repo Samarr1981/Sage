@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { auth } from '@clerk/nextjs/server';
 import {
   initializeSession,
   generateQuestion,
@@ -7,8 +8,20 @@ import {
   concludeSession,
 } from '@/lib/agent/graph';
 import type { ExaminerState, ExchangeRecord } from '@/lib/agent/types';
+import { checkRateLimit } from '@/lib/rateLimit';
+
+const isValidField = (v: unknown): v is string =>
+  typeof v === 'string' && v.trim().length > 0 && v.trim().length < 100;
 
 export async function POST(req: NextRequest) {
+  const { userId } = await auth();
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  if (!checkRateLimit(userId)) {
+    return NextResponse.json({ error: 'Rate limit exceeded. Try again in a minute.' }, { status: 429 });
+  }
+
   try {
     const t0 = Date.now();
     console.log(`[TIMING] Agent API: Request received at ${t0}`);
@@ -29,8 +42,19 @@ export async function POST(req: NextRequest) {
       console.log(`[TIMING] Agent API: Action=start, parsed at ${t1} (+${t1-t0}ms)`);
 
       const { topic, role, experienceLevel, interviewType } = body;
-      if (!topic?.trim()) {
-        return NextResponse.json({ error: 'Topic is required' }, { status: 400 });
+      if (!isValidField(topic)) {
+        return NextResponse.json({ error: 'Topic is required and must be under 100 characters' }, { status: 400 });
+      }
+      if (role !== undefined && !isValidField(role)) {
+        return NextResponse.json({ error: 'Role must be a non-empty string under 100 characters' }, { status: 400 });
+      }
+      const validLevels = ['junior', 'mid-level', 'senior'];
+      if (experienceLevel !== undefined && !validLevels.includes(experienceLevel)) {
+        return NextResponse.json({ error: 'Invalid experienceLevel' }, { status: 400 });
+      }
+      const validTypes = ['behavioral', 'technical', 'mixed'];
+      if (interviewType !== undefined && !validTypes.includes(interviewType)) {
+        return NextResponse.json({ error: 'Invalid interviewType' }, { status: 400 });
       }
 
       // Step 1: break topic into areas

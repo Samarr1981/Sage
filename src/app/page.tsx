@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect, memo } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuth, UserButton } from '@clerk/nextjs';
 import { useSpeech } from '@/lib/hooks/useSpeech';
 import { useRealtimeSession } from '@/lib/hooks/useRealtimeSession';
 import type {
@@ -1231,6 +1233,17 @@ function MockReportSection() {
 // while the form modal is open or being typed into
 // ─────────────────────────────────────────────
 const LandingPage = memo(function LandingPage({ onCtaClick }: { onCtaClick: () => void }) {
+  const { isSignedIn } = useAuth();
+  const router = useRouter();
+
+  const handleCta = () => {
+    if (isSignedIn) {
+      onCtaClick();
+    } else {
+      router.push('/sign-up');
+    }
+  };
+
   return (
     <>
       {/* ── NAV ── */}
@@ -1241,15 +1254,19 @@ const LandingPage = memo(function LandingPage({ onCtaClick }: { onCtaClick: () =
         <span className="text-2xl tracking-tight" style={{ fontFamily: 'DM Serif Display, serif', color: 'var(--accent)' }}>
           Sage
         </span>
-        <button
-          onClick={onCtaClick}
-          className="text-xs tracking-widest uppercase px-4 py-2 rounded-lg border transition-all duration-300"
-          style={{ borderColor: 'var(--border-bright)', color: 'var(--text-secondary)' }}
-          onMouseEnter={e => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.borderColor = 'var(--accent)'; }}
-          onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-secondary)'; e.currentTarget.style.borderColor = 'var(--border-bright)'; }}
-        >
-          Get Started
-        </button>
+        {isSignedIn ? (
+          <UserButton afterSignOutUrl="/" />
+        ) : (
+          <button
+            onClick={() => router.push('/sign-in')}
+            className="text-xs tracking-widest uppercase px-4 py-2 rounded-lg border transition-all duration-300"
+            style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
+            onMouseEnter={e => { e.currentTarget.style.opacity = '0.75'; }}
+            onMouseLeave={e => { e.currentTarget.style.opacity = '1'; }}
+          >
+            Sign In
+          </button>
+        )}
       </nav>
 
       {/* ── HERO — two-column ── */}
@@ -1305,13 +1322,12 @@ const LandingPage = memo(function LandingPage({ onCtaClick }: { onCtaClick: () =
             {/* Desktop CTA */}
             <div className="hidden lg:flex items-center gap-5">
               <button
-                onClick={onCtaClick}
+                onClick={handleCta}
                 className="btn-shimmer px-8 py-3.5 rounded-lg text-sm tracking-widest uppercase font-medium"
                 style={{ background: '#10b981', color: '#0a0a0a' }}
               >
                 Start Practicing Free
               </button>
-              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>No account · No credit card</span>
             </div>
           </div>
 
@@ -1323,13 +1339,12 @@ const LandingPage = memo(function LandingPage({ onCtaClick }: { onCtaClick: () =
           {/* Mobile CTA — shown below demo */}
           <div className="flex lg:hidden flex-col items-center gap-3 w-full z-10 order-3">
             <button
-              onClick={onCtaClick}
+              onClick={handleCta}
               className="btn-shimmer w-full max-w-sm py-4 rounded-lg text-sm tracking-widest uppercase font-medium"
               style={{ background: '#10b981', color: '#0a0a0a' }}
             >
               Start Practicing Free
             </button>
-            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>No account · No credit card</span>
           </div>
         </div>
       </section>
@@ -1444,7 +1459,7 @@ const LandingPage = memo(function LandingPage({ onCtaClick }: { onCtaClick: () =
             One session is enough to know exactly what you need to work on. No signup, no credit card.
           </p>
           <button
-            onClick={onCtaClick}
+            onClick={handleCta}
             className="btn-shimmer mt-2 px-9 py-3.5 rounded-lg text-sm tracking-widest uppercase font-medium"
             style={{ background: '#10b981', color: '#0a0a0a' }}
           >

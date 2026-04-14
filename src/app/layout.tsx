@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import { Analytics } from "@vercel/analytics/next"
+import { ClerkProvider } from '@clerk/nextjs';
 
 export const metadata: Metadata = {
   title: 'Sage — Adaptive Oral Examiner',
@@ -13,8 +14,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body>{children}</body>
-    </html>
+    <ClerkProvider>
+      <html lang="en">
+        <body>
+          {children}
+          <Analytics />
+        </body>
+      </html>
+    </ClerkProvider>
   );
 }
