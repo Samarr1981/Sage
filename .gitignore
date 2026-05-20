@@ -36,3 +36,10 @@ yarn-error.log*
 next-env.d.ts
 
 certificates
+
+# sensitive docs
+SAGE_DOCS.md
+
+# env files (catch all variants)
+.env
+.env.*

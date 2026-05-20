@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect, memo } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuth, UserButton } from '@clerk/nextjs';
+import { useAuth, UserButton, SignIn } from '@clerk/nextjs';
 import { useSpeech } from '@/lib/hooks/useSpeech';
 import { useRealtimeSession } from '@/lib/hooks/useRealtimeSession';
 import type {
@@ -1229,6 +1229,134 @@ function MockReportSection() {
 }
 
 // ─────────────────────────────────────────────
+// AUTH GATE — fullscreen overlay shown when a
+// returning unauthenticated user tries to start
+// a second session
+// ─────────────────────────────────────────────
+function AuthGate({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(10,10,10,0.97)',
+        zIndex: 200,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '2.5rem',
+        padding: '1.5rem',
+        backdropFilter: 'blur(12px)',
+      }}
+    >
+      {/* Violet radial glow */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -60%)',
+          width: '600px',
+          height: '600px',
+          borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(124,58,237,0.08) 0%, transparent 70%)',
+          pointerEvents: 'none',
+        }}
+      />
+
+      {/* Close button */}
+      <button
+        onClick={onClose}
+        style={{
+          position: 'absolute',
+          top: '1.5rem',
+          right: '1.5rem',
+          background: 'transparent',
+          border: 'none',
+          color: '#3d3b37',
+          fontSize: '1.25rem',
+          cursor: 'pointer',
+          lineHeight: 1,
+          padding: '0.25rem',
+          transition: 'color 0.2s',
+        }}
+        onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = '#6b6863'; }}
+        onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = '#3d3b37'; }}
+        aria-label="Close"
+      >
+        ✕
+      </button>
+
+      {/* Wordmark */}
+      <span
+        style={{
+          fontFamily: 'DM Serif Display, serif',
+          fontSize: '1.5rem',
+          color: '#c8b89a',
+          position: 'relative',
+          zIndex: 1,
+        }}
+      >
+        Sage
+      </span>
+
+      {/* Headline */}
+      <div
+        style={{
+          position: 'relative',
+          zIndex: 1,
+          textAlign: 'center',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.75rem',
+          maxWidth: '28rem',
+        }}
+      >
+        <h2
+          style={{
+            fontFamily: 'DM Serif Display, serif',
+            fontSize: 'clamp(1.5rem, 4vw, 2rem)',
+            lineHeight: 1.2,
+            color: '#f0ebe3',
+            margin: 0,
+          }}
+        >
+          You've completed your free session.{' '}
+          <span style={{ color: '#c8b89a' }}>
+            Create a free account to keep practicing.
+          </span>
+        </h2>
+        <p style={{ fontSize: '0.8rem', color: '#6b6863', margin: 0, lineHeight: 1.6 }}>
+          Your progress and evaluation history will be saved to your account.
+        </p>
+      </div>
+
+      {/* Clerk sign-in */}
+      <div style={{ position: 'relative', zIndex: 1 }}>
+        <SignIn
+          routing="hash"
+          appearance={{
+            variables: {
+              colorBackground: '#141414',
+              colorInputBackground: '#1a1a1a',
+              colorInputText: '#f0ebe3',
+              colorText: '#f0ebe3',
+              colorTextSecondary: '#9a9a9a',
+              colorPrimary: '#c8b89a',
+              colorNeutral: '#c8b89a',
+              borderRadius: '8px',
+              fontFamily: 'DM Mono, monospace',
+            },
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // LANDING PAGE — memoized so it never re-renders
 // while the form modal is open or being typed into
 // ─────────────────────────────────────────────
@@ -1237,11 +1365,7 @@ const LandingPage = memo(function LandingPage({ onCtaClick }: { onCtaClick: () =
   const router = useRouter();
 
   const handleCta = () => {
-    if (isSignedIn) {
-      onCtaClick();
-    } else {
-      router.push('/sign-up');
-    }
+    onCtaClick(); // Auth gate is checked inside the form submit, not here
   };
 
   return (
@@ -1481,6 +1605,8 @@ const LandingPage = memo(function LandingPage({ onCtaClick }: { onCtaClick: () =
 // MAIN PAGE
 // ─────────────────────────────────────────────
 export default function Home() {
+  const { isSignedIn } = useAuth();
+
   const [appPhase, setAppPhase] = useState<AppPhase>('landing');
   // role/experienceLevel/interviewType are set once at interview start, not per-keystroke
   const [role, setRole] = useState('');
@@ -1491,6 +1617,7 @@ export default function Home() {
   const [loadingMsg, setLoadingMsg] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [showReadyScreen, setShowReadyScreen] = useState(false);
+  const [showAuthGate, setShowAuthGate] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [currentQuestion, setCurrentQuestion] = useState('');
   const [topicAreas, setTopicAreas] = useState<any[]>([]);
@@ -1500,12 +1627,21 @@ export default function Home() {
   // Mobile pre-fetch: stores the initialization promise so handleReadyBegin
   // can await it without a network round-trip inside the gesture handler.
   const mobileInitPromiseRef = useRef<Promise<{ topicAreas: any[]; systemPrompt: string }> | null>(null);
+  // Stores pending form values when auth gate is shown mid-flow
+  const pendingFormRef = useRef<{ role: string; level: ExperienceLevel; type: InterviewType } | null>(null);
+  const userSyncedRef = useRef(false);
 
   useEffect(() => {
     isMobile.current =
       /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ||
       window.innerWidth < 768;
   }, []);
+
+  useEffect(() => {
+    if (!isSignedIn || userSyncedRef.current) return;
+    userSyncedRef.current = true;
+    fetch('/api/sync-user', { method: 'POST' }).catch(() => {});
+  }, [isSignedIn]);
 
   const handleShowForm = useCallback(() => {
     setShowForm(true);
@@ -1721,6 +1857,8 @@ export default function Home() {
       } as ExaminerState);
 
       setAppPhase('complete');
+      // Mark first session as completed so second session requires sign-in
+      try { localStorage.setItem('sage_session_completed', 'true'); } catch (_) {}
       console.log('[handleInterviewComplete] ✅ Phase transition to complete successful');
       console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     } catch (err) {
@@ -1855,15 +1993,61 @@ IMPORTANT: Begin the interview immediately when the session starts. Ask your fir
     }
   }, [realtimeSession]);
 
+  // Latest-ref so the auto-proceed effect always calls the current version
+  // without needing to list it as an effect dependency.
+  const handleFormSubmitRef = useRef<(r: string, l: ExperienceLevel, t: InterviewType) => void>(
+    () => {}
+  );
+
   // Intercepts the form's onStart.
   // Desktop → calls handleStart immediately (existing behaviour, unchanged).
   // Mobile  → stores the form values and shows the ReadyScreen overlay instead,
   //           so the user can unlock audio in their own tap before Vapi starts.
+
+  // Auto-proceed after Clerk sign-in completes (handles both hash-routing
+  // in-place sign-in and full-redirect-back-to-page scenarios).
+  useEffect(() => {
+    if (!isSignedIn) return;
+    // Same-page sign-in: pending values are in the ref
+    if (pendingFormRef.current) {
+      const { role: r, level: l, type: t } = pendingFormRef.current;
+      pendingFormRef.current = null;
+      setShowAuthGate(false);
+      try { sessionStorage.removeItem('sage_pending_form'); } catch (_) {}
+      handleFormSubmitRef.current(r, l, t);
+      return;
+    }
+    // Post-redirect sign-in: pending values are in sessionStorage
+    try {
+      const stored = sessionStorage.getItem('sage_pending_form');
+      if (stored) {
+        const { role: r, level: l, type: t } = JSON.parse(stored);
+        sessionStorage.removeItem('sage_pending_form');
+        handleFormSubmitRef.current(r, l, t);
+      }
+    } catch (_) {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSignedIn]);
+
   const handleFormSubmit = useCallback((
     formRole: string,
     formExpLevel: ExperienceLevel,
     formIntType: InterviewType,
   ) => {
+    // Second-session gate: if they've completed a session and aren't signed in, require auth
+    const hasCompleted = typeof window !== 'undefined' && localStorage.getItem('sage_session_completed');
+    if (hasCompleted && !isSignedIn) {
+      pendingFormRef.current = { role: formRole, level: formExpLevel, type: formIntType };
+      try {
+        sessionStorage.setItem('sage_pending_form', JSON.stringify({
+          role: formRole, level: formExpLevel, type: formIntType,
+        }));
+      } catch (_) {}
+      setShowForm(false);
+      setShowAuthGate(true);
+      return;
+    }
+
     const isMobileDevice =
       /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ||
       window.innerWidth < 768 ||
@@ -1931,7 +2115,10 @@ IMPORTANT: Begin the interview immediately when the session starts. Ask your fir
     } else {
       handleStart(formRole, formExpLevel, formIntType);
     }
-  }, [handleStart]);
+  }, [handleStart, isSignedIn]);
+
+  // Keep the latest-ref in sync so the auto-proceed effect can call it
+  handleFormSubmitRef.current = handleFormSubmit;
 
   // Called by the "I'm Ready" button on the ReadyScreen (mobile only).
   // IMPORTANT: iOS requires that both getUserMedia AND vapi.start() happen
@@ -2018,6 +2205,11 @@ IMPORTANT: Begin the interview immediately when the session starts. Ask your fir
             error={error}
           />
         </>
+      )}
+
+      {/* ── AUTH GATE (second session, unauthenticated) ── */}
+      {showAuthGate && (
+        <AuthGate onClose={() => setShowAuthGate(false)} />
       )}
 
       {/* ── READY SCREEN (mobile only) ── */}
