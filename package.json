@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.102.0",
     "@clerk/nextjs": "^5.7.5",
     "@langchain/core": "^0.3.80",
     "@langchain/langgraph": "^0.2.74",
