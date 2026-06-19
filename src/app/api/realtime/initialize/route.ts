@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ChatOpenAI } from '@langchain/openai';
 import { SystemMessage, HumanMessage } from '@langchain/core/messages';
+import { extractJson, extractJsonArray } from '@/lib/extractJson';
 
 function getLLM() {
   return new ChatOpenAI({
@@ -38,10 +39,14 @@ Format: [{"id":"1","name":"Area Name"},{"id":"2","name":"Area Name"},{"id":"3","
     console.log(`[TIMING] Realtime Initialize: LLM response received at ${t2} (+${t2-t1}ms)`);
 
     const raw = response.content as string;
-    const cleaned = raw.replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(cleaned);
+const parsed = extractJsonArray(raw);
 
-    const topicAreas = parsed.map((a: { id: string; name: string }) => ({
+if (!parsed || !Array.isArray(parsed) || parsed.length === 0) {
+  console.error('[Realtime Initialize] Failed to parse model output:', raw);
+  return NextResponse.json({ error: 'Initialization failed' }, { status: 500 });
+}
+
+const topicAreas = parsed.map((a: { id: string; name: string }) => ({
       id: a.id,
       name: a.name,
       covered: false,

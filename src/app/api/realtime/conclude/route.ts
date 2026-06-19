@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { extractJson } from '@/lib/extractJson';
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -78,8 +79,12 @@ JSON format:
     console.log(`[TIMING] Realtime Conclude: LLM response received at ${t2} (+${(t2-t1)}ms)`);
 
     const raw = response.content[0].type === 'text' ? response.content[0].text : '';
-    const cleaned = raw.replace(/```json|```/g, '').trim();
-    const finalEvaluation = JSON.parse(cleaned);
+const finalEvaluation = extractJson(raw);
+
+if (!finalEvaluation) {
+  console.error('[Realtime Conclude] Failed to parse model output:', raw);
+  return NextResponse.json({ error: 'Could not generate evaluation' }, { status: 500 });
+}
 
     const t3 = Date.now();
     console.log(`[TIMING] Realtime Conclude: Done at ${t3} (total: ${t3-t0}ms)`);

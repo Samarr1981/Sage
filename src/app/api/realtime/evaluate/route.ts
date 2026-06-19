@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { extractJson } from '@/lib/extractJson';
 
 const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -21,6 +22,7 @@ function isAnswerTooShort(answer: string): boolean {
   const words = answer.trim().split(/\s+/).filter(Boolean);
   return words.length < 15;
 }
+
 
 export async function POST(req: NextRequest) {
   try {
@@ -50,6 +52,7 @@ export async function POST(req: NextRequest) {
     const response = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 200,
+      temperature: 0.2,
       system: `You are a senior interviewer evaluating a candidate for: "${topic}".
 Area: "${areaName}".
 Experience level expected: ${experienceLevel || 'mid-level'}.
@@ -68,10 +71,11 @@ If evaluable:
 If not evaluable:
 {"quality":"incomplete","score":0,"feedback":"","reprompt":"<one natural sentence asking them to try again>"}
 
-Scoring:
-- strong: correct, confident, shows real experience (score 7-10)
-- medium: partially right, missing specifics or depth (score 4-6)
-- weak: vague, wrong, or clearly unprepared (score 0-3)
+Scoring (anchor on 5 = a borderline pass, the minimum you'd accept):
+- strong (7-10): correct, confident, shows real hands-on experience
+- medium (4-6): partially right, but missing specifics, depth, or precision
+- weak (0-3): vague, wrong, or clearly unprepared
+A 5 is "barely acceptable," not "pretty good." Most real answers should land where they actually deserve, not drift toward the middle.
 
 Feedback must reference what they actually said.`,
       messages: [
@@ -86,9 +90,23 @@ Feedback must reference what they actually said.`,
     console.log(`[TIMING] Realtime Evaluate: LLM response received at ${t2} (+${t2 - t1}ms)`);
 
     const raw = response.content[0].type === 'text' ? response.content[0].text : '';
-    const cleaned = raw.replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(cleaned);
+    const parsed = extractJson(raw);
 
+    // Model returned junk: do NOT crash the interview, return a neutral result and move on.
+    if (!parsed) {
+      console.error('[Realtime Evaluate] Failed to parse model output:', raw);
+      return NextResponse.json({ quality: 'medium', score: 5, feedback: '' });
+    }
+
+    // Sanitize before trusting the model's fields.
+    if (typeof parsed.score === 'number') {
+      parsed.score = Math.max(0, Math.min(10, Math.round(parsed.score)));
+    } else {
+      parsed.score = 5;
+    }
+    if (!['strong', 'medium', 'weak', 'incomplete'].includes(parsed.quality)) {
+      parsed.quality = 'medium';
+    }
     if (parsed.quality === 'incomplete' && !parsed.reprompt) {
       parsed.reprompt = pickReprompt();
     }
