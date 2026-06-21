@@ -580,41 +580,73 @@ const InterviewForm = memo(function InterviewForm({
   error,
 }: {
   isVisible: boolean;
-  onStart: (role: string, expLevel: ExperienceLevel, intType: InterviewType) => void;
+  onStart: (data: { resumePdfBase64: string; jobDescription: string; roundType: 'screening' | 'technical' | 'final' }) => void;
   onClose: () => void;
   unlockAudio: () => void;
   isSupported: boolean;
   error: string;
 }) {
-  const roleRef = useRef('');
-  const inputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const jdRef = useRef('');
 
-  const [roleHasValue, setRoleHasValue] = useState(false);
-  const [experienceLevel, setExperienceLevel] = useState<ExperienceLevel>('junior');
-  const [interviewType, setInterviewType] = useState<InterviewType>('behavioral');
+  const [resumeBase64, setResumeBase64] = useState('');
+  const [resumeFileName, setResumeFileName] = useState('');
+  const [fileError, setFileError] = useState('');
+  const [jdHasValue, setJdHasValue] = useState(false);
+  const [roundType, setRoundType] = useState<'screening' | 'technical' | 'final'>('screening');
 
-  // Focus input and reset state each time the modal opens
   useEffect(() => {
-    if (isVisible) {
-      requestAnimationFrame(() => inputRef.current?.focus());
-    } else {
-      roleRef.current = '';
-      setRoleHasValue(false);
-      if (inputRef.current) inputRef.current.value = '';
+    if (!isVisible) {
+      setResumeBase64('');
+      setResumeFileName('');
+      setFileError('');
+      jdRef.current = '';
+      setJdHasValue(false);
+      setRoundType('screening');
     }
   }, [isVisible]);
 
-  const handleRoleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    roleRef.current = e.target.value;
-    const next = e.target.value.trim().length > 0;
-    setRoleHasValue(prev => prev === next ? prev : next);
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.type !== 'application/pdf') {
+      setFileError('Please upload a PDF file.');
+      e.target.value = '';
+      return;
+    }
+    setFileError('');
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64 = result.split(',')[1];
+      setResumeBase64(base64);
+      setResumeFileName(file.name);
+    };
+    reader.onerror = () => {
+      setFileError('Could not read that file. Try again.');
+    };
+    reader.readAsDataURL(file);
   };
 
+  const handleRemoveFile = () => {
+    setResumeBase64('');
+    setResumeFileName('');
+    setFileError('');
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleJdChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    jdRef.current = e.target.value;
+    const next = e.target.value.trim().length > 0;
+    setJdHasValue(prev => prev === next ? prev : next);
+  };
+
+  const canSubmit = resumeBase64.length > 0 && jdHasValue;
+
   const handleSubmit = () => {
-    const role = roleRef.current.trim();
-    if (!role) return;
+    if (!canSubmit) return;
     unlockAudio();
-    onStart(role, experienceLevel, interviewType);
+    onStart({ resumePdfBase64: resumeBase64, jobDescription: jdRef.current.trim(), roundType });
   };
 
   return (
@@ -659,62 +691,77 @@ const InterviewForm = memo(function InterviewForm({
           </button>
         </div>
 
-        {/* Role input — uncontrolled */}
+        {/* Resume upload */}
         <div className="flex flex-col gap-1.5">
           <label className="text-xs text-[var(--text-secondary)] tracking-widest uppercase">
-            Role you're interviewing for
+            Resume (PDF)
           </label>
           <input
-            ref={inputRef}
-            type="text"
-            defaultValue=""
-            onChange={handleRoleChange}
-            onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
-            placeholder="e.g. Software Engineer, Product Manager..."
-            className="w-full border rounded-lg px-4 py-3 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none"
+            ref={fileInputRef}
+            type="file"
+            accept="application/pdf"
+            onChange={handleFileSelect}
+            className="hidden"
+          />
+          {resumeBase64 ? (
+            <div
+              className="flex items-center justify-between border rounded-lg px-4 py-3"
+              style={{ background: 'var(--bg)', borderColor: 'var(--border)' }}
+            >
+              <span className="text-sm text-[var(--text-primary)] truncate">{resumeFileName}</span>
+              <button
+                onClick={handleRemoveFile}
+                className="ml-2 text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors text-sm leading-none flex-shrink-0">
+                ✕
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="w-full border rounded-lg px-4 py-6 text-sm text-[var(--text-muted)] transition-colors duration-100 text-center"
+              style={{ background: 'var(--bg)', borderColor: 'var(--border)', borderStyle: 'dashed' }}
+              onFocus={e => e.currentTarget.style.borderColor = 'var(--accent)'}
+              onBlur={e => e.currentTarget.style.borderColor = 'var(--border)'}
+            >
+              Click to upload your resume PDF
+            </button>
+          )}
+          {fileError && <p className="text-xs text-[var(--red)]">{fileError}</p>}
+        </div>
+
+        {/* Job description */}
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs text-[var(--text-secondary)] tracking-widest uppercase">
+            Job description
+          </label>
+          <textarea
+            onChange={handleJdChange}
+            placeholder="Paste the job description here..."
+            rows={5}
+            className="w-full border rounded-lg px-4 py-3 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none resize-none"
             style={{ background: 'var(--bg)', borderColor: 'var(--border)' }}
             onFocus={e => e.currentTarget.style.borderColor = 'var(--accent)'}
             onBlur={e => e.currentTarget.style.borderColor = 'var(--border)'}
           />
         </div>
 
-        {/* Experience level */}
+        {/* Round type */}
         <div className="flex flex-col gap-1.5">
           <label className="text-xs text-[var(--text-secondary)] tracking-widest uppercase">
-            Experience level
+            Interview round
           </label>
           <div className="grid grid-cols-3 gap-2">
-            {(['junior', 'mid-level', 'senior'] as ExperienceLevel[]).map((level) => (
-              <button key={level}
-                onClick={() => setExperienceLevel(level)}
+            {(['screening', 'technical', 'final'] as const).map((round) => (
+              <button key={round}
+                onClick={() => setRoundType(round)}
                 className="py-2 rounded-lg text-xs tracking-widest uppercase transition-colors duration-100 border"
                 style={{
-                  borderColor: experienceLevel === level ? 'var(--accent)' : 'var(--border)',
-                  color: experienceLevel === level ? 'var(--accent)' : 'var(--text-muted)',
-                  background: experienceLevel === level ? 'var(--glow)' : 'transparent',
+                  borderColor: roundType === round ? 'var(--accent)' : 'var(--border)',
+                  color: roundType === round ? 'var(--accent)' : 'var(--text-muted)',
+                  background: roundType === round ? 'var(--glow)' : 'transparent',
                 }}>
-                {level}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Interview type */}
-        <div className="flex flex-col gap-1.5">
-          <label className="text-xs text-[var(--text-secondary)] tracking-widest uppercase">
-            Interview type
-          </label>
-          <div className="grid grid-cols-3 gap-2">
-            {(['behavioral', 'technical', 'mixed'] as InterviewType[]).map((type) => (
-              <button key={type}
-                onClick={() => setInterviewType(type)}
-                className="py-2 rounded-lg text-xs tracking-widest uppercase transition-colors duration-100 border"
-                style={{
-                  borderColor: interviewType === type ? 'var(--accent)' : 'var(--border)',
-                  color: interviewType === type ? 'var(--accent)' : 'var(--text-muted)',
-                  background: interviewType === type ? 'var(--glow)' : 'transparent',
-                }}>
-                {type}
+                {round}
               </button>
             ))}
           </div>
@@ -730,13 +777,13 @@ const InterviewForm = memo(function InterviewForm({
 
         <button
           onClick={handleSubmit}
-          disabled={!roleHasValue}
+          disabled={!canSubmit}
           className="w-full py-3 rounded-lg text-sm tracking-widest uppercase transition-colors duration-100"
           style={{
-            background: roleHasValue ? 'var(--accent)' : 'var(--surface)',
-            color: roleHasValue ? 'var(--bg)' : 'var(--text-muted)',
-            opacity: roleHasValue ? '1' : '0.3',
-            cursor: roleHasValue ? 'pointer' : 'not-allowed',
+            background: canSubmit ? 'var(--accent)' : 'var(--surface)',
+            color: canSubmit ? 'var(--bg)' : 'var(--text-muted)',
+            opacity: canSubmit ? '1' : '0.3',
+            cursor: canSubmit ? 'pointer' : 'not-allowed',
           }}>
           Begin Interview
         </button>
