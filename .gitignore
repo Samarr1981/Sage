@@ -42,4 +42,4 @@ SAGE_DOCS.md
 
 # env files (catch all variants)
 .env
-.env.*
+.env.*CLAUDE.md
