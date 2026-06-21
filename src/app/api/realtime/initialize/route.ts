@@ -96,7 +96,7 @@ export async function POST(req: NextRequest) {
 
     const response = await client.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 1500,
+      max_tokens: 2500,
       temperature: 0.4,
       system: buildSystemPrompt(roundType as RoundType),
       messages: [
@@ -123,7 +123,8 @@ export async function POST(req: NextRequest) {
     const t2 = Date.now();
     console.log(`[TIMING] Realtime Initialize: LLM response received at ${t2} (+${t2 - t1}ms)`);
 
-    const raw = response.content[0].type === 'text' ? response.content[0].text : '';
+    const textBlock = response.content.find((b) => b.type === 'text');
+const raw = textBlock && textBlock.type === 'text' ? textBlock.text : '';
     const parsed = extractJson(raw);
 
     if (!parsed || !Array.isArray(parsed.areas) || parsed.areas.length !== 3) {
