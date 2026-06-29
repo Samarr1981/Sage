@@ -257,11 +257,12 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
     // on the Vapi dashboard assistant's system prompt configuration.
     if (systemPrompt) {
       overrides.model = {
-        provider: 'openai',
-        model: 'gpt-4o',
-        messages: [{ role: 'system', content: systemPrompt }],
-        temperature: 0.8,
-      };
+  provider: 'openai',
+  model: 'gpt-4.1',
+  messages: [{ role: 'system', content: systemPrompt }],
+  temperature: 0.8,
+};
+overrides.firstMessage = "Hi, I'm Sage — let's get started.";
     }
 
     console.log('[Vapi] Starting call with overrides:', JSON.stringify({ variableValues, firstMessage: overrides.firstMessage }));

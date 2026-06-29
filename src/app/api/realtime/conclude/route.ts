@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
 
     const response = await client.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 1500,
+      max_tokens: 4000,
       temperature: 0.3,
       system: `You are a senior technical interviewer delivering a final assessment for a ${interviewType} interview.
 Role: "${role}". Candidate level: ${experienceLevel}.

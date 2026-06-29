@@ -1649,6 +1649,82 @@ const LandingPage = memo(function LandingPage({ onCtaClick }: { onCtaClick: () =
 });
 
 // ─────────────────────────────────────────────
+// INTERVIEW PLAN — returned by /api/realtime/initialize
+// ─────────────────────────────────────────────
+
+type InterviewPlan = {
+  role: string;
+  company: string | null;
+  seniority: 'junior' | 'mid-level' | 'senior';
+  roundType: string;
+  areas: { name: string; whyRelevant: string; skillsToTest: string[]; strongAnswerLooksLike: string }[];
+  gapsToProbe: { gap: string; howToProbe: string }[];
+  strengthsToConfirm: string[];
+  topicAreas: { id: string; name: string; covered: boolean; score: number | null; questionCount: number }[];
+};
+
+function buildVapiSystemPrompt(plan: InterviewPlan, roundType: 'screening' | 'technical' | 'final'): string {
+  const roundDirective: Record<'screening' | 'technical' | 'final', string> = {
+    screening:
+      'ROUND: SCREENING. Behave like a friendly recruiter doing a first-pass qualification call — warm, brisk, broad. Prioritize breadth and fit over depth. Keep it SHORT: ask 4-5 questions total across the areas, roughly one per area plus a follow-up or two. Do NOT drill deep or demand technical rigor. You are checking motivation, basic competence, and clarity. Override any guideline below that pushes for more questions or deeper probing.Do NOT use end_call until you have asked and received answers for the minimum number of questions specified above AND said the exact phrase "That brings us to the end of our interview today.',
+    technical:
+      'ROUND: TECHNICAL. Stress-test actual technical depth. Push hard on specifics, trade-offs, and production experience. This is the deep round: ask 6-8 questions, at least 2 per area, and follow up relentlessly on vague answers. Set a high bar. The standard guidelines below apply in full.Do NOT use end_call until you have asked and received answers for the minimum number of questions specified above AND said the exact phrase "That brings us to the end of our interview today',
+    final:
+      'ROUND: FINAL. Assess judgment, ownership, and senior fit — how they work, not just what they know. Go fewer-but-deeper: 4-6 questions total, conversational and probing, heavy on "tell me about a time you owned / decided / disagreed". Confirm whether claimed leadership and impact were really theirs. Favor depth and follow-ups over breadth. Override the per-area question minimums below if depth demands it.Do NOT use end_call until you have asked and received answers for the minimum number of questions specified above AND said the exact phrase "That brings us to the end of our interview today.',
+  };
+
+  const areasBlock = plan.areas.map((a, i) =>
+    `Area ${i + 1}: ${a.name}\n  Why it matters: ${a.whyRelevant}\n  Skills to test: ${a.skillsToTest.join(', ')}\n  A strong answer looks like: ${a.strongAnswerLooksLike}`
+  ).join('\n\n');
+
+  const gapsBlock = plan.gapsToProbe.length
+    ? plan.gapsToProbe.map(g => `- ${g.gap} (How to probe: ${g.howToProbe})`).join('\n')
+    : '- None flagged.';
+
+  const strengthsBlock = plan.strengthsToConfirm.length
+    ? plan.strengthsToConfirm.map(s => `- ${s}`).join('\n')
+    : '- None flagged.';
+
+  const companyLine = plan.company ? ` at ${plan.company}` : '';
+
+  return `You are Sage, a senior interviewer conducting a ${roundType} interview for a ${plan.seniority} ${plan.role} role${companyLine}.
+
+Assess the candidate across these 3 areas:
+
+${areasBlock}
+
+Resume-vs-role gaps to probe (work these in naturally where relevant):
+${gapsBlock}
+
+Resume claims worth confirming:
+${strengthsBlock}
+
+General Guidelines (the ROUND INSTRUCTIONS at the very end take precedence over these where they conflict):
+- Ask ONE question at a time and wait for the candidate to finish before responding.
+- Move through the areas in order.
+- If an answer is under 15 words, treat it as incomplete and ask them to go deeper.
+- Strong answer: acknowledge briefly, then either follow up or move on.
+- Medium answer: ask one clarifying follow-up.
+- Weak answer: drop to a more foundational question.
+- Transition naturally between areas.
+
+Be conversational and human:
+- Short, direct questions (max 2 sentences).
+- Never open with "Can you", "Could you", "Would you mind".
+- Avoid filler like "elaborate", "explain in detail", "walk me through".
+- No praise or encouragement — stay professional and neutral.
+
+Concluding:
+- Once you have satisfied the ROUND INSTRUCTIONS below (right number of questions, areas reasonably covered, substantive answers given), conclude.
+- To conclude, say: "That brings us to the end of our interview today. Thank you for your time." Then use the end_call tool. Do NOT call end_call before saying this exact phrase and completing at least 6 questions.
+
+IMPORTANT: The system will deliver an opening greeting automatically. Your FIRST action after that greeting is to immediately ask your first interview question about ${plan.areas[0].name}. Do not pause, do not wait for the candidate to speak, do not say anything else first. Ask the question now.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ROUND INSTRUCTIONS (HIGHEST PRIORITY — these override anything above):
+${roundDirective[roundType]}`;
+}
+
+// ─────────────────────────────────────────────
 // MAIN PAGE
 // ─────────────────────────────────────────────
 export default function Home() {
@@ -1673,9 +1749,7 @@ export default function Home() {
   const isMobile = useRef(false);
   // Mobile pre-fetch: stores the initialization promise so handleReadyBegin
   // can await it without a network round-trip inside the gesture handler.
-  const mobileInitPromiseRef = useRef<Promise<{ topicAreas: any[]; systemPrompt: string }> | null>(null);
-  // Stores pending form values when auth gate is shown mid-flow
-  const pendingFormRef = useRef<{ role: string; level: ExperienceLevel; type: InterviewType } | null>(null);
+  const mobileInitPromiseRef = useRef<Promise<{ plan: InterviewPlan }> | null>(null);
   const userSyncedRef = useRef(false);
 
   useEffect(() => {
@@ -1917,17 +1991,10 @@ export default function Home() {
 
 
   const handleStart = useCallback(async (
-    formRole: string,
-    formExpLevel: ExperienceLevel,
-    formIntType: InterviewType,
+    payload: { resumePdfBase64: string; jobDescription: string; roundType: 'screening' | 'technical' | 'final' },
   ) => {
     const t0 = performance.now();
     console.log(`[TIMING] handleStart: Begin Interview clicked at ${t0.toFixed(2)}ms`);
-
-    // Commit form values to Home state (used by session/complete display)
-    setRole(formRole);
-    setExperienceLevel(formExpLevel);
-    setInterviewType(formIntType);
 
     setError('');
     setShowForm(false);
@@ -1938,76 +2005,43 @@ export default function Home() {
       setTimeout(() => setLoadingMsg('Building interview areas...'), 800);
       setTimeout(() => setLoadingMsg('Connecting to Sage...'), 1600);
 
-      const topic = `${formRole} — ${formIntType} interview — ${formExpLevel} level`;
-
       const t1 = performance.now();
       console.log(`[TIMING] handleStart: Initializing topic areas at ${t1.toFixed(2)}ms`);
 
-      // Initialize topic areas
       const initRes = await fetch('/api/realtime/initialize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic }),
+        body: JSON.stringify({
+          resumePdfBase64: payload.resumePdfBase64,
+          jobDescription: payload.jobDescription,
+          roundType: payload.roundType,
+        }),
       });
 
       const initData = await initRes.json();
       if (!initRes.ok) throw new Error(initData.error);
 
-      const topicAreas = initData.topicAreas;
+      const plan: InterviewPlan = initData;
       const t2 = performance.now();
       console.log(`[TIMING] handleStart: Topic areas initialized at ${t2.toFixed(2)}ms (+${(t2-t1).toFixed(2)}ms)`);
 
-      // Initialize Realtime session with topic areas
-      realtimeSession.initializeInterview(topicAreas);
-      setTopicAreas(topicAreas);
+      // Commit plan values to Home state (used by session/complete display)
+      setRole(plan.role);
+      setExperienceLevel(plan.seniority);
+      setInterviewType(payload.roundType as any);
 
-      // Build system prompt for Sage
-      const areasList = topicAreas.map((a: any, i: number) => `${i+1}. ${a.name}`).join('\n');
+      realtimeSession.initializeInterview(plan.topicAreas);
+      setTopicAreas(plan.topicAreas);
 
-      const systemPrompt = `You are Sage, a senior interviewer at a top tech company conducting a ${formIntType} interview for a ${formRole} position. The candidate's experience level is ${formExpLevel}.
-
-Your task is to assess the candidate's knowledge across these 3 areas:
-${areasList}
-
-Interview Guidelines:
-- Ask ONE question at a time and wait for the candidate to finish speaking before responding
-- Start with the first area and progress naturally through all three
-- MANDATORY: Ask at least 2 questions per topic area before moving to the next area
-- MANDATORY: Cover ALL 3 topic areas before concluding the interview
-- If a candidate's answer is under 15 words, it is incomplete — ask them to elaborate or provide more detail
-- Strong answers: acknowledge briefly and ask one more question in this area before moving on
-- Medium answers: ask ONE clarifying follow-up to probe deeper
-- Weak answers: ask a more foundational question to assess basics
-- Transition naturally between areas (e.g., "Let's talk about [next area]...")
-- Total interview should be 6-8 questions across all 3 areas
-
-Be conversational and human-like:
-- Short, direct questions (max 2 sentences)
-- Never start with "Can you", "Could you", "Would you mind"
-- Avoid filler words like "elaborate", "explain in detail", "walk me through"
-- Sound like a real interviewer, not a chatbot
-- No encouragement or praise - stay professional and neutral
-
-Completion Rules (ALL must be true before concluding):
-1. You have covered ALL 3 topic areas
-2. You have asked at least 2 questions per topic area
-3. The candidate has provided substantive answers (not just 1-2 word responses)
-4. You have asked a total of at least 6 questions
-
-When ALL completion rules are met, say: "That wraps up our interview today. Thank you for your time." This signals the end.
-
-IMPORTANT: Begin the interview immediately when the session starts. Ask your first question about ${topicAreas[0].name} right after your opening greeting. Do not wait for the candidate to speak first.`;
+      const systemPrompt = buildVapiSystemPrompt(plan, payload.roundType);
 
       const t3 = performance.now();
       console.log(`[TIMING] handleStart: Connecting to Vapi at ${t3.toFixed(2)}ms`);
 
-      // Start Vapi call — system prompt lives in the assistant dashboard config;
-      // we pass dynamic values (role, level, type) as variable overrides so the
-      // assistant can personalise the interview without a code change.
       await realtimeSession.connect(systemPrompt, {
-        topic: formRole,
-        level: formExpLevel,
-        interviewType: formIntType,
+        topic: plan.role,
+        level: plan.seniority,
+        interviewType: payload.roundType,
       });
 
       const t4 = performance.now();
@@ -2040,56 +2074,15 @@ IMPORTANT: Begin the interview immediately when the session starts. Ask your fir
     }
   }, [realtimeSession]);
 
-  // Latest-ref so the auto-proceed effect always calls the current version
-  // without needing to list it as an effect dependency.
-  const handleFormSubmitRef = useRef<(r: string, l: ExperienceLevel, t: InterviewType) => void>(
-    () => {}
-  );
-
   // Intercepts the form's onStart.
-  // Desktop → calls handleStart immediately (existing behaviour, unchanged).
-  // Mobile  → stores the form values and shows the ReadyScreen overlay instead,
-  //           so the user can unlock audio in their own tap before Vapi starts.
-
-  // Auto-proceed after Clerk sign-in completes (handles both hash-routing
-  // in-place sign-in and full-redirect-back-to-page scenarios).
-  useEffect(() => {
-    if (!isSignedIn) return;
-    // Same-page sign-in: pending values are in the ref
-    if (pendingFormRef.current) {
-      const { role: r, level: l, type: t } = pendingFormRef.current;
-      pendingFormRef.current = null;
-      setShowAuthGate(false);
-      try { sessionStorage.removeItem('sage_pending_form'); } catch (_) {}
-      handleFormSubmitRef.current(r, l, t);
-      return;
-    }
-    // Post-redirect sign-in: pending values are in sessionStorage
-    try {
-      const stored = sessionStorage.getItem('sage_pending_form');
-      if (stored) {
-        const { role: r, level: l, type: t } = JSON.parse(stored);
-        sessionStorage.removeItem('sage_pending_form');
-        handleFormSubmitRef.current(r, l, t);
-      }
-    } catch (_) {}
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSignedIn]);
+  // Desktop → calls handleStart immediately.
+  // Mobile  → shows ReadyScreen overlay so the user can unlock audio in their own tap.
 
   const handleFormSubmit = useCallback((
-    formRole: string,
-    formExpLevel: ExperienceLevel,
-    formIntType: InterviewType,
+    payload: { resumePdfBase64: string; jobDescription: string; roundType: 'screening' | 'technical' | 'final' },
   ) => {
-    // Second-session gate: if they've completed a session and aren't signed in, require auth
     const hasCompleted = typeof window !== 'undefined' && localStorage.getItem('sage_session_completed');
     if (hasCompleted && !isSignedIn) {
-      pendingFormRef.current = { role: formRole, level: formExpLevel, type: formIntType };
-      try {
-        sessionStorage.setItem('sage_pending_form', JSON.stringify({
-          role: formRole, level: formExpLevel, type: formIntType,
-        }));
-      } catch (_) {}
       setShowForm(false);
       setShowAuthGate(true);
       return;
@@ -2103,69 +2096,32 @@ IMPORTANT: Begin the interview immediately when the session starts. Ask your fir
     setShowForm(false);
 
     if (isMobileDevice) {
-      // Stash values so ReadyScreen and handleReadyBegin can read them from state
-      setRole(formRole);
-      setExperienceLevel(formExpLevel);
-      setInterviewType(formIntType);
-
-      // Pre-fetch topic areas NOW while the ReadyScreen is displayed.
-      // This way handleReadyBegin can start Vapi immediately after the user
-      // taps "I'm Ready" — no network round-trip inside the gesture handler,
-      // which would invalidate iOS's user-gesture audio context.
-      const topic = `${formRole} — ${formIntType} interview — ${formExpLevel} level`;
+      // Pre-fetch the plan NOW while ReadyScreen is displayed so handleReadyBegin
+      // can start Vapi immediately after "I'm Ready" — no network round-trip inside
+      // the gesture handler, which would invalidate iOS's user-gesture audio context.
       mobileInitPromiseRef.current = fetch('/api/realtime/initialize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic }),
+        body: JSON.stringify({
+          resumePdfBase64: payload.resumePdfBase64,
+          jobDescription: payload.jobDescription,
+          roundType: payload.roundType,
+        }),
       }).then(async (res) => {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
-        const areas = data.topicAreas;
-        const areasList = areas.map((a: any, i: number) => `${i+1}. ${a.name}`).join('\n');
-        const prompt = `You are Sage, a senior interviewer at a top tech company conducting a ${formIntType} interview for a ${formRole} position. The candidate's experience level is ${formExpLevel}.
-
-Your task is to assess the candidate's knowledge across these 3 areas:
-${areasList}
-
-Interview Guidelines:
-- Ask ONE question at a time and wait for the candidate to finish speaking before responding
-- Start with the first area and progress naturally through all three
-- MANDATORY: Ask at least 2 questions per topic area before moving to the next area
-- MANDATORY: Cover ALL 3 topic areas before concluding the interview
-- If a candidate's answer is under 15 words, it is incomplete — ask them to elaborate or provide more detail
-- Strong answers: acknowledge briefly and ask one more question in this area before moving on
-- Medium answers: ask ONE clarifying follow-up to probe deeper
-- Weak answers: ask a more foundational question to assess basics
-- Transition naturally between areas (e.g., "Let's talk about [next area]...")
-- Total interview should be 6-8 questions across all 3 areas
-
-Be conversational and human-like:
-- Short, direct questions (max 2 sentences)
-- Never start with "Can you", "Could you", "Would you mind"
-- Avoid filler words like "elaborate", "explain in detail", "walk me through"
-- Sound like a real interviewer, not a chatbot
-- No encouragement or praise - stay professional and neutral
-
-Completion Rules (ALL must be true before concluding):
-1. You have covered ALL 3 topic areas
-2. You have asked at least 2 questions per topic area
-3. The candidate has provided substantive answers (not just 1-2 word responses)
-4. You have asked a total of at least 6 questions
-
-When ALL completion rules are met, say: "That wraps up our interview today. Thank you for your time." This signals the end.
-
-IMPORTANT: Begin the interview immediately when the session starts. Ask your first question about ${areas[0].name} right after your opening greeting. Do not wait for the candidate to speak first.`;
-        return { topicAreas: areas, systemPrompt: prompt };
+        const plan: InterviewPlan = data;
+        setRole(plan.role);
+        setExperienceLevel(plan.seniority);
+        setInterviewType(payload.roundType as any);
+        return { plan };
       });
 
       setShowReadyScreen(true);
     } else {
-      handleStart(formRole, formExpLevel, formIntType);
+      handleStart(payload);
     }
   }, [handleStart, isSignedIn]);
-
-  // Keep the latest-ref in sync so the auto-proceed effect can call it
-  handleFormSubmitRef.current = handleFormSubmit;
 
   // Called by the "I'm Ready" button on the ReadyScreen (mobile only).
   // IMPORTANT: iOS requires that both getUserMedia AND vapi.start() happen
@@ -2178,13 +2134,10 @@ IMPORTANT: Begin the interview immediately when the session starts. Ask your fir
     setLoadingMsg('Connecting to Sage...');
 
     try {
-      // Wait for the pre-fetched initialization data
-      const initData = await (mobileInitPromiseRef.current ?? Promise.reject(new Error('No init data')));
-      const { topicAreas: areas, systemPrompt } = initData;
+      const { plan } = await (mobileInitPromiseRef.current ?? Promise.reject(new Error('No init data')));
 
-      // Commit interview setup to state
-      realtimeSession.initializeInterview(areas);
-      setTopicAreas(areas);
+      realtimeSession.initializeInterview(plan.topicAreas);
+      setTopicAreas(plan.topicAreas);
 
       // Unlock iOS WebRTC audio output — must happen inside the gesture chain
       // (which we preserve because the only await above is a pre-resolved or
@@ -2198,11 +2151,12 @@ IMPORTANT: Begin the interview immediately when the session starts. Ask your fir
         // Permission denied or unavailable — let Vapi surface its own error.
       }
 
-      // Start Vapi — this is now close enough to the gesture that iOS allows it
+      const systemPrompt = buildVapiSystemPrompt(plan, plan.roundType as 'screening' | 'technical' | 'final');
+
       await realtimeSession.connect(systemPrompt, {
-        topic: role,
-        level: experienceLevel,
-        interviewType,
+        topic: plan.role,
+        level: plan.seniority,
+        interviewType: plan.roundType,
       });
 
       setAppPhase('session');
@@ -2213,7 +2167,7 @@ IMPORTANT: Begin the interview immediately when the session starts. Ask your fir
       setAppPhase('landing');
       setShowForm(true);
     }
-  }, [realtimeSession, role, experienceLevel, interviewType]);
+  }, [realtimeSession]);
 
   const handleRestart = () => {
     cancel();
