@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { extractJson } from '@/lib/extractJson';
+import { createAdminClient } from '@/lib/supabase';
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -9,7 +10,7 @@ export async function POST(req: NextRequest) {
     const t0 = Date.now();
     console.log(`[TIMING] Realtime Conclude API: Request received at ${t0}`);
 
-    const { exchanges, role, experienceLevel, interviewType, topicAreas } = await req.json();
+    const { exchanges, role, experienceLevel, interviewType, topicAreas, clerkUserId } = await req.json();
 
     if (!exchanges || exchanges.length === 0) {
       return NextResponse.json({ error: 'No exchanges to evaluate' }, { status: 400 });
@@ -85,6 +86,38 @@ if (!finalEvaluation) {
   console.error('[Realtime Conclude] Failed to parse model output:', raw);
   return NextResponse.json({ error: 'Could not generate evaluation' }, { status: 500 });
 }
+
+    // Persist to Supabase — non-blocking; never fail the response on a DB error
+    if (clerkUserId) {
+      try {
+        const supabase = createAdminClient();
+
+        const { data: userRow } = await supabase
+          .from('users')
+          .select('id')
+          .eq('clerk_id', clerkUserId)
+          .single();
+
+        if (userRow) {
+          const { data: sessionRow } = await supabase
+            .from('sessions')
+            .insert({ user_id: userRow.id, role, level: experienceLevel })
+            .select('id')
+            .single();
+
+          if (sessionRow) {
+            await supabase.from('evaluations').insert({
+              session_id: sessionRow.id,
+              overall_score: finalEvaluation.overallScore,
+              strengths: finalEvaluation.strengths ?? [],
+              improvements: finalEvaluation.areasForImprovement ?? [],
+            });
+          }
+        }
+      } catch (dbErr) {
+        console.error('[Realtime Conclude] Supabase save failed (non-fatal):', dbErr);
+      }
+    }
 
     const t3 = Date.now();
     console.log(`[TIMING] Realtime Conclude: Done at ${t3} (total: ${t3-t0}ms)`);

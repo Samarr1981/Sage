@@ -1728,7 +1728,7 @@ ${roundDirective[roundType]}`;
 // MAIN PAGE
 // ─────────────────────────────────────────────
 export default function Home() {
-  const { isSignedIn } = useAuth();
+  const { isSignedIn, userId } = useAuth();
 
   const [appPhase, setAppPhase] = useState<AppPhase>('landing');
   // role/experienceLevel/interviewType are set once at interview start, not per-keystroke
@@ -1945,6 +1945,7 @@ export default function Home() {
         experienceLevel,
         interviewType,
         topicAreas: realtimeSession.topicAreas,
+        clerkUserId: userId ?? null,
       };
 
       console.log('[handleInterviewComplete] 📤 Sending to /api/realtime/conclude:');
