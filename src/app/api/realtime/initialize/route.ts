@@ -103,6 +103,7 @@ export async function POST(req: NextRequest) {
         {
           role: 'user',
           content: [
+            
             {
               type: 'document',
               source: {
