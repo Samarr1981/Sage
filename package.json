@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "jest"
+    "test": "jest",
+    "test-grader": "TS_NODE_PROJECT=scripts/tsconfig.json node --env-file=.env.local -r ts-node/register scripts/test-grader.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.102.0",

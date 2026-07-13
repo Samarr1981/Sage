@@ -5,9 +5,12 @@ import { useRouter } from 'next/navigation';
 import { useAuth, UserButton, SignIn } from '@clerk/nextjs';
 import { useSpeech } from '@/lib/hooks/useSpeech';
 import { useRealtimeSession } from '@/lib/hooks/useRealtimeSession';
+import { downloadReport } from '@/lib/exportReport';
+import { SaveStatusToast } from '@/components/interview/SaveStatusToast';
 import type {
   ExaminerState,
   FinalEvaluation,
+  ExchangeRecord,
   TopicArea,
   InterviewType,
   ExperienceLevel,
@@ -272,7 +275,7 @@ function AnimatedReadiness({ rating }: { rating: string }) {
 function EvaluationScreen({ evaluation, role, exchanges, onRestart }: {
   evaluation: FinalEvaluation;
   role: string;
-  exchanges: { question: string; answer: string }[];
+  exchanges: ExchangeRecord[];
   onRestart: () => void;
 }) {
   // ── Mount flag drives all stagger animations ──────────────────────────────
@@ -459,6 +462,12 @@ function EvaluationScreen({ evaluation, role, exchanges, onRestart }: {
           {evaluation.recommendation}
         </p>
       </div>
+
+      {/* Download — always available, independent of whether the server-side save succeeded */}
+      <button onClick={() => downloadReport({ role, evaluation, exchanges })}
+        className="w-full py-3 border border-[var(--border)] rounded-lg text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--accent)] transition-all duration-300 tracking-widest uppercase">
+        Download Report
+      </button>
 
       {/* Restart */}
       <button onClick={onRestart}
@@ -1709,6 +1718,8 @@ You may NEVER ask a question from a new area immediately after an answer. After 
 - SURFACE: correct but generic. States what, not why. No trade-offs, no specifics, no numbers, no consequences.
 - SUBSTANTIVE: concrete reasoning, real trade-offs, or lived experience with specifics.
 
+The classification is internal reasoning. NEVER say the words "vague", "surface", or "substantive" out loud. Never announce your classification, never label the answer, never narrate your evaluation process. Everything you output is spoken aloud to the candidate. Classify silently, then act.
+
 Then act:
 - VAGUE -> You MUST follow up. Do not accept it. Push on the missing reasoning: "That's your friend's reasoning. What's yours?" or "Walk me through the actual trade-off you were weighing." Keep pushing until they give real reasoning or explicitly say they don't know. "I don't know" ends the thread. A vague answer does not.
 - SURFACE -> Ask exactly one follow-up forcing specificity: a concrete example, a number, or what breaks if they had chosen otherwise.
@@ -1777,6 +1788,7 @@ export default function Home() {
   const [transcript, setTranscript] = useState('');
   const [currentQuestion, setCurrentQuestion] = useState('');
   const [topicAreas, setTopicAreas] = useState<any[]>([]);
+  const [saveToast, setSaveToast] = useState<{ message: string; tone: 'error' | 'warning' } | null>(null);
 
   const agentStateRef = useRef<ExaminerState | null>(null);
   const isMobile = useRef(false);
@@ -1784,6 +1796,14 @@ export default function Home() {
   // can await it without a network round-trip inside the gesture handler.
   const mobileInitPromiseRef = useRef<Promise<{ plan: InterviewPlan }> | null>(null);
   const userSyncedRef = useRef(false);
+  // Bumped by handleRestart so an in-flight /api/realtime/conclude response
+  // that resolves after the user has already left this session gets discarded
+  // instead of clobbering the fresh state with a stale evaluation.
+  const sessionGenerationRef = useRef(0);
+  // The interview plan (areas, gaps, strengths) from /api/realtime/initialize.
+  // Only handleStart/handleReadyBegin have it in scope when it's fetched;
+  // mirrored here so handleInterviewComplete can forward it to /api/realtime/conclude.
+  const planRef = useRef<InterviewPlan | null>(null);
 
   useEffect(() => {
     isMobile.current =
@@ -1957,6 +1977,11 @@ export default function Home() {
     console.log('[handleInterviewComplete] Exchanges accumulated:', realtimeSession.exchanges.length);
     console.log('[handleInterviewComplete] Exchanges:', JSON.stringify(realtimeSession.exchanges, null, 2));
 
+    // Snapshot the generation counter — if the user restarts before this
+    // request resolves, sessionGenerationRef will have moved on and the
+    // result below gets discarded instead of clobbering the fresh session.
+    const myGeneration = sessionGenerationRef.current;
+
     // If not already disconnected (e.g., manual force end), disconnect now
     if (realtimeSession.status !== 'disconnected') {
       console.log('[handleInterviewComplete] Manually triggered - disconnecting WebSocket');
@@ -1979,6 +2004,7 @@ export default function Home() {
         interviewType,
         topicAreas: realtimeSession.topicAreas,
         clerkUserId: userId ?? null,
+        plan: planRef.current,
       };
 
       console.log('[handleInterviewComplete] 📤 Sending to /api/realtime/conclude:');
@@ -1997,6 +2023,11 @@ export default function Home() {
       console.log('Status:', res.status, res.ok ? '✅' : '❌');
       console.log('Data:', JSON.stringify(data, null, 2));
 
+      if (sessionGenerationRef.current !== myGeneration) {
+        console.log('[handleInterviewComplete] Stale response (user restarted) — discarding');
+        return;
+      }
+
       if (!res.ok) throw new Error(data.error);
 
       console.log('[handleInterviewComplete] ✅ Evaluation received successfully');
@@ -2014,14 +2045,34 @@ export default function Home() {
       setAppPhase('complete');
       // Mark first session as completed so second session requires sign-in
       try { localStorage.setItem('sage_session_completed', 'true'); } catch (_) {}
+
+      // The evaluation always renders — the Supabase write happens server-side
+      // and is best-effort. Surface it if it silently didn't happen for a
+      // signed-in candidate, since they'd otherwise assume it was saved.
+      if (userId && !data.sessionSaved) {
+        console.error('[handleInterviewComplete] ⚠️ Session was not saved:', data.saveError);
+        setSaveToast({
+          message: "Your evaluation was generated, but we couldn't save it to your history. Use Download Report below to keep a copy.",
+          tone: 'warning',
+        });
+      }
+
       console.log('[handleInterviewComplete] ✅ Phase transition to complete successful');
       console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     } catch (err) {
       console.error('[handleInterviewComplete Error] ❌', err);
+      if (sessionGenerationRef.current !== myGeneration) {
+        console.log('[handleInterviewComplete] Stale failure (user restarted) — discarding');
+        return;
+      }
       setError('Failed to generate evaluation. Please try again.');
+      setSaveToast({
+        message: 'Something went wrong generating your evaluation. Please try the interview again.',
+        tone: 'error',
+      });
       console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     }
-  }, [realtimeSession, role, experienceLevel, interviewType]);
+  }, [realtimeSession, role, experienceLevel, interviewType, userId]);
 
 
   const handleStart = useCallback(async (
@@ -2056,6 +2107,7 @@ export default function Home() {
       if (!initRes.ok) throw new Error(initData.error);
 
       const plan: InterviewPlan = initData;
+      planRef.current = plan;
       const t2 = performance.now();
       console.log(`[TIMING] handleStart: Topic areas initialized at ${t2.toFixed(2)}ms (+${(t2-t1).toFixed(2)}ms)`);
 
@@ -2169,6 +2221,7 @@ export default function Home() {
 
     try {
       const { plan } = await (mobileInitPromiseRef.current ?? Promise.reject(new Error('No init data')));
+      planRef.current = plan;
 
       realtimeSession.initializeInterview(plan.topicAreas);
       setTopicAreas(plan.topicAreas);
@@ -2204,6 +2257,9 @@ export default function Home() {
   }, [realtimeSession]);
 
   const handleRestart = () => {
+    // Invalidate any in-flight /api/realtime/conclude response from the
+    // session being left — see sessionGenerationRef in handleInterviewComplete.
+    sessionGenerationRef.current += 1;
     cancel();
     realtimeSession.disconnect();
     setAppPhase('landing');
@@ -2215,9 +2271,11 @@ export default function Home() {
     setTopicAreas([]);
     setTranscript('');
     setError('');
+    setSaveToast(null);
     setShowForm(false);
     setShowReadyScreen(false);
     agentStateRef.current = null;
+    planRef.current = null;
   };
 
   return (
@@ -2225,6 +2283,14 @@ export default function Home() {
       ? 'min-h-screen'
       : 'min-h-screen flex flex-col items-center justify-center px-6 py-12'
     } style={{ background: 'var(--bg)' }}>
+
+      {saveToast && (
+        <SaveStatusToast
+          message={saveToast.message}
+          tone={saveToast.tone}
+          onDismiss={() => setSaveToast(null)}
+        />
+      )}
 
       {/* ── LANDING (marketing page) ── */}
       {appPhase === 'landing' && (

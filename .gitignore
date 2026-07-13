@@ -43,3 +43,8 @@ SAGE_DOCS.md
 # env files (catch all variants)
 .env
 .env.*CLAUDE.md
+
+
+# Local test artifacts
+test-payload.json
+certificates/
