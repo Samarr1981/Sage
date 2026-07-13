@@ -1379,13 +1379,13 @@ function AuthGate({ onClose }: { onClose: () => void }) {
             margin: 0,
           }}
         >
-          You've completed your free session.{' '}
+          Sign in to{' '}
           <span style={{ color: '#c8b89a' }}>
-            Create a free account to keep practicing.
+            start your interview.
           </span>
         </h2>
         <p style={{ fontSize: '0.8rem', color: '#6b6863', margin: 0, lineHeight: 1.6 }}>
-          Your progress and evaluation history will be saved to your account.
+          It takes a few seconds and lets us save your report.
         </p>
       </div>
 
@@ -2043,8 +2043,6 @@ export default function Home() {
       } as ExaminerState);
 
       setAppPhase('complete');
-      // Mark first session as completed so second session requires sign-in
-      try { localStorage.setItem('sage_session_completed', 'true'); } catch (_) {}
 
       // The evaluation always renders — the Supabase write happens server-side
       // and is best-effort. Surface it if it silently didn't happen for a
@@ -2167,8 +2165,7 @@ export default function Home() {
   const handleFormSubmit = useCallback((
     payload: { resumePdfBase64: string; jobDescription: string; roundType: 'screening' | 'technical' | 'final' },
   ) => {
-    const hasCompleted = typeof window !== 'undefined' && localStorage.getItem('sage_session_completed');
-    if (hasCompleted && !isSignedIn) {
+    if (!isSignedIn) {
       setShowForm(false);
       setShowAuthGate(true);
       return;
