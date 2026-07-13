@@ -7,6 +7,7 @@ import { useSpeech } from '@/lib/hooks/useSpeech';
 import { useRealtimeSession } from '@/lib/hooks/useRealtimeSession';
 import { downloadReport } from '@/lib/exportReport';
 import { SaveStatusToast } from '@/components/interview/SaveStatusToast';
+import { PreInterviewInstructionsModal } from '@/components/interview/PreInterviewInstructionsModal';
 import type {
   ExaminerState,
   FinalEvaluation,
@@ -1783,6 +1784,7 @@ export default function Home() {
   const [error, setError] = useState('');
   const [loadingMsg, setLoadingMsg] = useState('');
   const [showForm, setShowForm] = useState(false);
+  const [showInstructionsModal, setShowInstructionsModal] = useState(false);
   const [showReadyScreen, setShowReadyScreen] = useState(false);
   const [showAuthGate, setShowAuthGate] = useState(false);
   const [transcript, setTranscript] = useState('');
@@ -1796,6 +1798,9 @@ export default function Home() {
   // can await it without a network round-trip inside the gesture handler.
   const mobileInitPromiseRef = useRef<Promise<{ plan: InterviewPlan }> | null>(null);
   const userSyncedRef = useRef(false);
+  // Holds the form payload while the pre-interview instructions modal is
+  // shown, so handleInstructionsAcknowledged can resume the start flow.
+  const pendingStartPayloadRef = useRef<{ resumePdfBase64: string; jobDescription: string; roundType: 'screening' | 'technical' | 'final' } | null>(null);
   // Bumped by handleRestart so an in-flight /api/realtime/conclude response
   // that resolves after the user has already left this session gets discarded
   // instead of clobbering the fresh state with a stale evaluation.
@@ -2159,6 +2164,9 @@ export default function Home() {
   }, [realtimeSession]);
 
   // Intercepts the form's onStart.
+  // Shows the pre-interview instructions modal first — the interview only
+  // actually begins once the user explicitly dismisses it (see
+  // handleInstructionsAcknowledged), which then follows the existing path:
   // Desktop → calls handleStart immediately.
   // Mobile  → shows ReadyScreen overlay so the user can unlock audio in their own tap.
 
@@ -2179,8 +2187,9 @@ export default function Home() {
     setShowForm(false);
 
     if (isMobileDevice) {
-      // Pre-fetch the plan NOW while ReadyScreen is displayed so handleReadyBegin
-      // can start Vapi immediately after "I'm Ready" — no network round-trip inside
+      // Pre-fetch the plan NOW while the instructions modal (and then
+      // ReadyScreen) are displayed so handleReadyBegin can start Vapi
+      // immediately after "I'm Ready" — no network round-trip inside
       // the gesture handler, which would invalidate iOS's user-gesture audio context.
       mobileInitPromiseRef.current = fetch('/api/realtime/initialize', {
         method: 'POST',
@@ -2199,12 +2208,31 @@ export default function Home() {
         setInterviewType(payload.roundType as any);
         return { plan };
       });
+    }
 
+    pendingStartPayloadRef.current = payload;
+    setShowInstructionsModal(true);
+  }, [isSignedIn]);
+
+  // Called when the user dismisses the pre-interview instructions modal —
+  // only then does the interview actually begin.
+  const handleInstructionsAcknowledged = useCallback(() => {
+    setShowInstructionsModal(false);
+
+    const payload = pendingStartPayloadRef.current;
+    if (!payload) return;
+
+    const isMobileDevice =
+      /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ||
+      window.innerWidth < 768 ||
+      ('ontouchstart' in window);
+
+    if (isMobileDevice) {
       setShowReadyScreen(true);
     } else {
       handleStart(payload);
     }
-  }, [handleStart, isSignedIn]);
+  }, [handleStart]);
 
   // Called by the "I'm Ready" button on the ReadyScreen (mobile only).
   // IMPORTANT: iOS requires that both getUserMedia AND vapi.start() happen
@@ -2308,6 +2336,13 @@ export default function Home() {
       {/* ── AUTH GATE (second session, unauthenticated) ── */}
       {showAuthGate && (
         <AuthGate onClose={() => setShowAuthGate(false)} />
+      )}
+
+      {/* ── PRE-INTERVIEW INSTRUCTIONS ── */}
+      {/* Must be explicitly dismissed before the interview begins — see
+          handleFormSubmit / handleInstructionsAcknowledged. */}
+      {showInstructionsModal && (
+        <PreInterviewInstructionsModal onReady={handleInstructionsAcknowledged} />
       )}
 
       {/* ── READY SCREEN (mobile only) ── */}
