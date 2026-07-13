@@ -260,9 +260,19 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
   provider: 'openai',
   model: 'gpt-4.1',
   messages: [{ role: 'system', content: systemPrompt }],
-  temperature: 0.8,
+  temperature: 0.6,
 };
-overrides.firstMessage = "Hi, I'm Sage — let's get started.";
+overrides.firstMessageMode = 'assistant-speaks-first-with-model-generated-message';
+    } else {
+      // A falsy systemPrompt would otherwise silently fall back to whatever
+      // prompt is configured in the Vapi dashboard — fail loudly instead so
+      // this doesn't ship a mismatched prompt without anyone noticing.
+      const msg = 'buildVapiSystemPrompt() returned no systemPrompt — refusing to start the call with the Vapi dashboard fallback prompt';
+      console.error('[Vapi]', msg);
+      setStatus('error');
+      setError(msg);
+      optionsRef.current.onError?.(msg);
+      return;
     }
 
     console.log('[Vapi] Starting call with overrides:', JSON.stringify({ variableValues, firstMessage: overrides.firstMessage }));
