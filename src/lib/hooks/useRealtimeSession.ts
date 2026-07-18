@@ -96,16 +96,6 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
     assistantId?: string,
     variables?: VapiSessionVariables,
   ): Promise<void> => {
-    const publicKey = process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY;
-    if (!publicKey) {
-      const msg = 'NEXT_PUBLIC_VAPI_PUBLIC_KEY env variable is not set';
-      console.error('[Vapi]', msg);
-      setStatus('error');
-      setError(msg);
-      optionsRef.current.onError?.(msg);
-      return;
-    }
-
     // Teardown any previous call before starting a new one
     if (vapiRef.current) {
       try { vapiRef.current.stop(); } catch (_) {}
@@ -115,7 +105,28 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
     setStatus('connecting');
     setError('');
 
-    const vapi = new Vapi(publicKey);
+    // Mint a short-lived, web-call-scoped JWT server-side rather than
+    // shipping a static public key in the client bundle. See
+    // /api/realtime/vapi-token.
+    let token: string;
+    try {
+      const res = await fetch('/api/realtime/vapi-token', { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Failed to fetch Vapi token (${res.status})`);
+      }
+      ({ token } = await res.json());
+      if (!token) throw new Error('Vapi token response missing token');
+    } catch (err: any) {
+      const msg = err?.message ?? 'Failed to fetch Vapi token';
+      console.error('[Vapi]', msg);
+      setStatus('error');
+      setError(msg);
+      optionsRef.current.onError?.(msg);
+      return;
+    }
+
+    const vapi = new Vapi(token);
     vapiRef.current = vapi;
 
     // ── call-start: Vapi WebRTC is live ─────────────────────────────────

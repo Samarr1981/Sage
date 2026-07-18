@@ -21,6 +21,7 @@
     "@vapi-ai/web": "^2.5.2",
     "@vercel/analytics": "^2.0.1",
     "caniuse-lite": "^1.0.30001799",
+    "jsonwebtoken": "^9.0.3",
     "next": "^14.2.25",
     "openai": "^4.104.0",
     "react": "^18",
@@ -29,6 +30,7 @@
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
