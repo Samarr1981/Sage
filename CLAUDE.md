@@ -34,7 +34,7 @@ it's currently a fully-working endpoint with zero callers.
 | File | Role |
 |---|---|
 | `src/app/layout.tsx` | Root layout. Wraps app in `ClerkProvider`, loads global CSS, mounts Vercel Analytics. |
-| `src/app/page.tsx` | **2,314 lines.** Everything renders here: landing page, interview form, ready screen, live session UI, evaluation report, auth gate. See §4 — this file is the main refactoring target. |
+| `src/app/page.tsx` | **2,189 lines.** Everything renders here: landing page, ready screen, live session UI, evaluation report, auth gate (the interview form itself is extracted to `src/components/interview/InterviewForm.tsx`). See §4 — this file is the main refactoring target. |
 | `src/app/globals.css` | Tailwind base + CSS custom properties (`--bg`, `--accent`, `--green/yellow/red`, etc.) and keyframe animations (`orb-breathe`, `wave`, `ticker-scroll`...). All component styling references these vars via inline `style={{ color: 'var(--accent)' }}`. |
 | `src/app/sign-in/[[...sign-in]]/page.tsx`, `sign-up/...` | Clerk `<SignIn>`/`<SignUp>` wrapped in Sage-branded layout (split-screen on desktop). |
 
@@ -129,14 +129,15 @@ Rough map of what's in the file, top to bottom:
 - **`EvaluationScreen`** — renders `FinalEvaluation`, with "early exit" / "short session" guards
   that swap in different copy for sessions under 5 exchanges or 1000 transcript chars.
 - **`ReadyScreen`** — mobile-only iOS-gesture interstitial.
-- **`InterviewForm`** — `memo`'d, owns its own local state via `useRef` so keystrokes don't
-  re-render `Home`.
+- **`InterviewForm`** — extracted to `src/components/interview/InterviewForm.tsx` (`memo`'d,
+  owns its own local state via `useRef` so keystrokes don't re-render `Home`); imported into
+  `page.tsx`, not defined inline anymore.
 - **Marketing/landing sections** (`DemoContent`, `ReadinessSection`, `QuestionTicker`,
   `MockReportSection`, `LandingPage`) — purely presentational, mostly hardcoded demo content,
   ~700 lines combined. These never touch interview state.
 - **`AuthGate`** — fullscreen Clerk `<SignIn>` overlay shown to returning unauthenticated users.
 - **`Home()`** — the actual stateful container: `appPhase`, form values, `agentState`,
-  `mobileInitPromiseRef`, `pendingFormRef`, wiring between `useSpeech`, `useRealtimeSession`,
+  `initPromiseRef`, `pendingFormRef`, wiring between `useSpeech`, `useRealtimeSession`,
   and the API calls.
 
 **Where state lives today (as-is, not prescriptive):**
@@ -198,6 +199,11 @@ fix would be faster.
   inline subcomponents to `page.tsx`.
 - Presentational components (orbs, rings, badges, tickers) should stay pure — props in, JSX out,
   no `fetch`, no Vapi/Clerk/Supabase imports.
+- **Before adding new logic to `page.tsx`, check whether it's touching a self-contained
+  subcomponent** — one that's `memo`'d, owns its own local state, and communicates only via
+  props (`InterviewForm`, `PreInterviewInstructionsModal`, and `SaveStatusToast` under
+  `src/components/interview/` are the pattern) — that could be extracted to its own file first.
+  Don't grow `page.tsx` further without flagging it as a candidate for extraction.
 
 ### Where state lives
 - **Vapi call lifecycle and interview-session data** (transcripts, exchanges, topic areas,
