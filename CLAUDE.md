@@ -42,6 +42,8 @@ it's currently a fully-working endpoint with zero callers.
 | Route | Status | What it does | Model |
 |---|---|---|---|
 | `realtime/initialize` | ✅ LIVE | Splits a topic into exactly 3 `TopicArea[]`. Called at interview start. | gpt-4o-mini (LangChain) |
+| `realtime/start-call` | ✅ LIVE | Takes `{ plan, roundType }`, builds the full interview system prompt server-side via `lib/agent/buildVapiSystemPrompt.ts`, fetches the dashboard assistant (`85a73bb3-...`) to copy its non-model config, and mints a temporary per-interview Vapi assistant (POST `/assistant`) with that prompt + a `maxDurationSeconds` cost backstop. Returns `{ assistantId }` — the prompt itself never reaches the client. Called right after `realtime/initialize`, before `vapi.start()`. Rate-limited per user/IP. | — (calls Vapi's REST API with `VAPI_PRIVATE_KEY`) |
+| `realtime/end-call` | ✅ LIVE | Takes `{ assistantId }`, deletes that temporary Vapi assistant (DELETE `/assistant/{id}`). Called two ways: fire-and-forget from `useRealtimeSession`'s `call-end` handler, and again from `page.tsx`'s `handleRestart` as a belt-and-suspenders cleanup — both swallow errors and don't block the UI. | — |
 | `realtime/conclude` | ✅ LIVE | Takes all `ExchangeRecord[]` + metadata, returns `FinalEvaluation`. Called when Vapi detects the closing phrase. | gpt-4o-mini (LangChain) |
 | `realtime/evaluate` | 🚧 ORPHANED (no caller yet) | Scores a single Q&A exchange (`quality`, `score`, `feedback`, optional `reprompt`). Just migrated from gpt-4o-mini → **claude-haiku-4-5** via the raw Anthropic SDK (see git history — this is the file open in your IDE). This is the endpoint your mid-call injection feature will call. | claude-haiku-4-5 (Anthropic SDK) |
 | `realtime/session` | ❌ DEAD | Creates an ephemeral OpenAI Realtime API session token. Built for a direct-WebSocket implementation that was replaced by Vapi. Vapi manages its own tokens — nothing calls this. | — |
@@ -53,13 +55,14 @@ it's currently a fully-working endpoint with zero callers.
 ### `src/lib/`
 | File | Status | Role |
 |---|---|---|
-| `hooks/useRealtimeSession.ts` | ✅ LIVE — the core of the product | Owns the entire Vapi WebRTC lifecycle: creates the `Vapi` instance, registers all event listeners (`call-start`, `transcript`, `speech-start/end`, `volume-level`, `error`), tracks `exchanges`/`topicAreas`/`currentAreaIndex`, exposes `connect()`/`disconnect()`/`initializeInterview()`. **Note:** it records each user answer as an `ExchangeRecord` with a hardcoded `quality: 'medium'` placeholder — real per-answer evaluation does not happen yet. That's the gap your mid-call injection work fills. |
+| `hooks/useRealtimeSession.ts` | ✅ LIVE — the core of the product | Owns the entire Vapi WebRTC lifecycle: creates the `Vapi` instance, registers all event listeners (`call-start`, `transcript`, `speech-start/end`, `volume-level`, `error`), tracks `exchanges`/`topicAreas`/`currentAreaIndex`, exposes `connect(assistantId, variables)`/`disconnect()`/`initializeInterview()`. `connect()` takes a temporary assistant id minted by `/api/realtime/start-call` — it no longer builds or receives a system prompt itself. On `call-end` it fire-and-forgets a call to `/api/realtime/end-call` to delete that temporary assistant. **Note:** it records each user answer as an `ExchangeRecord` with a hardcoded `quality: 'medium'` placeholder — real per-answer evaluation does not happen yet. That's the gap your mid-call injection work fills. |
+| `agent/buildVapiSystemPrompt.ts` | ✅ LIVE — server-only | Exports `InterviewPlan` and `buildVapiSystemPrompt(plan, roundType)`. Moved here from `page.tsx` so the full interview prompt (follow-up protocol, round directives, closing phrase, etc.) is only ever built and read server-side, inside `/api/realtime/start-call` — never sent to the client. Do not import this from `page.tsx` or any other client component. |
 | `hooks/useSpeech.ts` | ⚠️ PARTIALLY DEAD | Legacy hook from the pre-Vapi WebSocket/MediaRecorder architecture (Web Speech API + Whisper + OpenAI TTS, with the `isSageSpeakingRef` echo-prevention pattern). Its core transcript loop (`handleTranscript` → `/api/agent` → TTS playback) is **dead code** — never reached in the live Vapi flow. However `page.tsx` still instantiates it and uses `unlockAudio`, `isSupported`, `error`, and `cancel` from it (passed into `InterviewForm` and called in `handleRestart`). Don't delete this hook without first untangling those four still-live call sites. |
 | `agent/graph.ts` | ❌ DEAD | The original LangGraph-style interview engine: `initializeSession`, `generateQuestion`, `evaluateAnswer`, `decideNextStep` (pure router), `concludeSession`. Only reachable via the orphaned `/api/agent` route. Kept as a reference for "what controllable interview logic looks like" — see SAGE_DOCS §8 for the stated rationale. |
 | `agent/types.ts` | ✅ LIVE | Shared types: `TopicArea`, `ExchangeRecord`, `FinalEvaluation`, `ExaminerState`, `AnswerQuality`, `InterviewType`, `ExperienceLevel`, `AgentPhase`. Used by both the live and dead flows — this is why it's hard to tell from imports alone which flow you're in. |
 | `supabase.ts` | ✅ LIVE | Two Supabase client factories: `createClient()` (browser, RLS-bound, anon key) and `createAdminClient()` (server-only, service-role key, bypasses RLS — never import client-side). |
 | `syncUser.ts` | ✅ LIVE | `syncClerkUser()` — upserts a Clerk user into the Supabase `users` table. The *only* Supabase write path that exists right now. |
-| `rateLimit.ts` | Used by `agent`, `stt`, `tts` routes | In-memory `Map`-based limiter, 10 req/min/user, keyed by `${userId}:${minuteWindow}`. Not called by the `realtime/*` routes (they're not auth-gated the same way). Resets on server restart; doesn't share state across Vercel instances — fine for now, would need Upstash Redis at scale. |
+| `rateLimit.ts` | Used by `agent`, `stt`, `tts`, `realtime/start-call` routes | In-memory `Map`-based limiter, 10 req/min/key, keyed by `${key}:${minuteWindow}`. Most `realtime/*` routes aren't auth-gated and don't call this; `realtime/start-call` is the exception — it mints a billable Vapi assistant per call, so it rate-limits by Clerk `userId` when signed in, falling back to a `ip:<x-forwarded-for>` key for anonymous callers. Resets on server restart; doesn't share state across Vercel instances — fine for now, would need Upstash Redis at scale. |
 
 ### Other
 | File | Role |
@@ -76,14 +79,19 @@ it's currently a fully-working endpoint with zero callers.
 1. Landing page → InterviewForm → handleFormSubmit
 2. Desktop: handleStart()                  Mobile: ReadyScreen pre-fetch → handleReadyBegin()
    │                                          │
-   ├─ POST /api/realtime/initialize  ────────┤   (gpt-4o-mini → 3 TopicAreas)
+   ├─ POST /api/realtime/initialize  ────────┤   (gpt-4o-mini → 3 TopicAreas, i.e. `plan`)
    │
-   ├─ build systemPrompt string (inline template, duplicated between
-   │  handleStart and the mobile pre-fetch in handleFormSubmit — see §6)
+   ├─ POST /api/realtime/start-call  ────────┤   ({ plan, roundType } →
+   │  (mobile: chained inside the same          buildVapiSystemPrompt() server-side →
+   │   pre-fetch promise, before the             fetch dashboard assistant for voice/
+   │   gesture-triggered vapi.start())           transcriber config → POST /assistant
+   │                                             on Vapi → { assistantId })
+   │  The full system prompt is built and read only inside this route — it never
+   │  reaches the client. See `lib/agent/buildVapiSystemPrompt.ts`.
    │
-   └─ realtimeSession.connect(systemPrompt, {topic, level, interviewType})
+   └─ realtimeSession.connect(assistantId, {topic, level, interviewType})
         │
-        └─ vapi.start(VAPI_ASSISTANT_ID, { variableValues, model: {...gpt-4o, systemPrompt} })
+        └─ vapi.start(assistantId, { variableValues })
              │
 3. Live call — useRealtimeSession listens to Vapi's event stream:
    - assistant transcript (final) → currentQuestion, onQuestionReceived
@@ -94,6 +102,8 @@ it's currently a fully-working endpoint with zero callers.
    - assistant transcript contains "That wraps up our interview..." → vapi.stop() → call-end
 
 4. call-end → onInterviewComplete → handleInterviewComplete()
+   │         → fire-and-forget POST /api/realtime/end-call ({ assistantId }) — deletes
+   │           the temporary assistant, swallows errors, never blocks the UI
    └─ POST /api/realtime/conclude  (gpt-4o-mini → FinalEvaluation)
         └─ setAppPhase('complete') → <EvaluationScreen>
 ```
@@ -154,10 +164,12 @@ Rough map of what's in the file, top to bottom:
    code, which is the main thing that makes this confusing.
 3. **`useSpeech` is a zombie hook** — its main loop is dead, but four of its return values are
    still load-bearing in `page.tsx`. Don't delete it as part of an unrelated change.
-4. **The system prompt is duplicated** — the long interview-instructions template string appears
-   twice in `page.tsx` (once in `handleStart`, once in the mobile pre-fetch inside
-   `handleFormSubmit`), word-for-word. If you change interview behavior, you must change both
-   or extract it to a shared function.
+4. ~~The system prompt is duplicated~~ **RESOLVED** — the prompt-building logic now lives in one
+   place, `lib/agent/buildVapiSystemPrompt.ts`, called only from `/api/realtime/start-call`.
+   `page.tsx`'s two call sites (`handleStart` and the mobile pre-fetch in `handleFormSubmit`) each
+   still make their own `POST /api/realtime/start-call` request — that duplication is now just
+   "call this route twice," not "keep two copies of the prompt text in sync." The prompt itself
+   also no longer ships to the client at all (see §3, §6).
 5. **`ExchangeRecord.quality` is always `'medium'`** at recording time (a placeholder — see
    `useRealtimeSession.ts` line ~186). Real scoring only happens post-call in `/api/realtime/conclude`,
    which re-derives quality from the LLM's reading of the raw exchange. Wiring up

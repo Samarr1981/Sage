@@ -18,9 +18,6 @@ export type { TopicArea, ExchangeRecord };
 export type RealtimeStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 export type AnswerQuality = 'strong' | 'medium' | 'weak' | 'incomplete';
 
-// Vapi assistant configured in the Vapi dashboard
-const VAPI_ASSISTANT_ID = '85a73bb3-d87d-4a5a-bd62-55ee094e40eb';
-
 // ── Hook options (unchanged from legacy hook) ────────────────────────────────
 interface UseRealtimeSessionOptions {
   onQuestionReceived?: (question: string) => void;
@@ -64,6 +61,10 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
   const exchangesRef = useRef<ExchangeRecord[]>([]);
   const currentAreaIndexRef = useRef(0);
   const currentQuestionRef = useRef('');
+  // The temporary per-interview Vapi assistant id, minted server-side by
+  // /api/realtime/start-call. Stored so the call-end handler can tell
+  // /api/realtime/end-call to delete it once the call is over.
+  const assistantIdRef = useRef<string | null>(null);
 
   // Always keep callbacks current so event listeners never stale-close
   useEffect(() => { optionsRef.current = options; });
@@ -86,12 +87,13 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
 
   // ── Connect — starts a Vapi call ─────────────────────────────────────────
   //
-  // systemPrompt is injected directly as a model-messages override so the app
-  // is self-contained and doesn't depend on the Vapi dashboard system prompt.
-  // variables are also injected via assistantOverrides.variableValues for any
-  // {{template}} placeholders still in the dashboard config.
+  // assistantId is a temporary, single-interview Vapi assistant already
+  // configured server-side (system prompt, model, first message) by
+  // /api/realtime/start-call — the full interview prompt never reaches the
+  // client. variables are injected via assistantOverrides.variableValues for
+  // any {{template}} placeholders still in the assistant's config.
   const connect = useCallback(async (
-    systemPrompt?: string,
+    assistantId?: string,
     variables?: VapiSessionVariables,
   ): Promise<void> => {
     const publicKey = process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY;
@@ -131,6 +133,19 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
       setIsUserSpeaking(false);
       setVolumeLevel(0);
       optionsRef.current.onInterviewComplete?.();
+
+      // Fire-and-forget cleanup of the temporary per-interview assistant —
+      // never blocks the UI and swallows errors (worst case it's an orphaned
+      // assistant, not a broken interview).
+      const idToDelete = assistantIdRef.current;
+      if (idToDelete) {
+        assistantIdRef.current = null;
+        fetch('/api/realtime/end-call', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ assistantId: idToDelete }),
+        }).catch(() => {});
+      }
     });
 
     // ── speech-start / speech-end: Sage is speaking ──────────────────────
@@ -253,21 +268,11 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
       variableValues,
     };
 
-    // Pass the full system prompt directly so the app works without relying
-    // on the Vapi dashboard assistant's system prompt configuration.
-    if (systemPrompt) {
-      overrides.model = {
-  provider: 'openai',
-  model: 'gpt-4.1',
-  messages: [{ role: 'system', content: systemPrompt }],
-  temperature: 0.6,
-};
-overrides.firstMessageMode = 'assistant-speaks-first-with-model-generated-message';
-    } else {
-      // A falsy systemPrompt would otherwise silently fall back to whatever
-      // prompt is configured in the Vapi dashboard — fail loudly instead so
-      // this doesn't ship a mismatched prompt without anyone noticing.
-      const msg = 'buildVapiSystemPrompt() returned no systemPrompt — refusing to start the call with the Vapi dashboard fallback prompt';
+    // A falsy assistantId means /api/realtime/start-call wasn't called (or
+    // failed) upstream — fail loudly rather than silently starting a call
+    // with no assistant, which vapi.start() would reject anyway.
+    if (!assistantId) {
+      const msg = 'connect() called without an assistantId — call /api/realtime/start-call first';
       console.error('[Vapi]', msg);
       setStatus('error');
       setError(msg);
@@ -275,9 +280,11 @@ overrides.firstMessageMode = 'assistant-speaks-first-with-model-generated-messag
       return;
     }
 
-    console.log('[Vapi] Starting call with overrides:', JSON.stringify({ variableValues, firstMessage: overrides.firstMessage }));
+    assistantIdRef.current = assistantId;
+
+    console.log('[Vapi] Starting call with overrides:', JSON.stringify({ variableValues }));
     try {
-      await vapi.start(VAPI_ASSISTANT_ID, overrides);
+      await vapi.start(assistantId, overrides);
     } catch (err: any) {
       const msg = err?.message ?? (typeof err === 'string' ? err : JSON.stringify(err)) ?? 'Failed to start Vapi call';
       console.error('[Vapi] Start error:', JSON.stringify(err));
