@@ -92,9 +92,13 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
   // /api/realtime/start-call — the full interview prompt never reaches the
   // client. variables are injected via assistantOverrides.variableValues for
   // any {{template}} placeholders still in the assistant's config.
+  // prefetchedToken lets a caller that already fetched /api/realtime/vapi-token
+  // in parallel with start-call (see page.tsx's optimistic prefetch) skip the
+  // redundant fetch here — if omitted, connect() fetches its own token.
   const connect = useCallback(async (
     assistantId?: string,
     variables?: VapiSessionVariables,
+    prefetchedToken?: string,
   ): Promise<void> => {
     // Teardown any previous call before starting a new one
     if (vapiRef.current) {
@@ -105,18 +109,29 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
     setStatus('connecting');
     setError('');
 
+    const connectStart = performance.now();
+    console.log(`[TIMING] connect: entered at ${connectStart.toFixed(2)}ms`);
+
     // Mint a short-lived, web-call-scoped JWT server-side rather than
     // shipping a static public key in the client bundle. See
     // /api/realtime/vapi-token.
     let token: string;
     try {
-      const res = await fetch('/api/realtime/vapi-token', { method: 'POST' });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `Failed to fetch Vapi token (${res.status})`);
+      if (prefetchedToken) {
+        token = prefetchedToken;
+        const tokenReceived = performance.now();
+        console.log(`[TIMING] connect: using prefetched vapi-token at ${tokenReceived.toFixed(2)}ms (+${(tokenReceived - connectStart).toFixed(2)}ms) — skipped fetch`);
+      } else {
+        const res = await fetch('/api/realtime/vapi-token', { method: 'POST' });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || `Failed to fetch Vapi token (${res.status})`);
+        }
+        ({ token } = await res.json());
+        if (!token) throw new Error('Vapi token response missing token');
+        const tokenReceived = performance.now();
+        console.log(`[TIMING] connect: vapi-token resolved at ${tokenReceived.toFixed(2)}ms (+${(tokenReceived - connectStart).toFixed(2)}ms)`);
       }
-      ({ token } = await res.json());
-      if (!token) throw new Error('Vapi token response missing token');
     } catch (err: any) {
       const msg = err?.message ?? 'Failed to fetch Vapi token';
       console.error('[Vapi]', msg);
@@ -131,6 +146,8 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
 
     // ── call-start: Vapi WebRTC is live ─────────────────────────────────
     vapi.on('call-start', () => {
+      const callStartTime = performance.now();
+      console.log(`[TIMING] connect: call-start event fired at ${callStartTime.toFixed(2)}ms (+${(callStartTime - connectStart).toFixed(2)}ms since connect() entered)`);
       console.log('[Vapi] Call started');
       setStatus('connected');
       optionsRef.current.onSessionReady?.();
@@ -294,8 +311,12 @@ export function useRealtimeSession(options: UseRealtimeSessionOptions = {}) {
     assistantIdRef.current = assistantId;
 
     console.log('[Vapi] Starting call with overrides:', JSON.stringify({ variableValues }));
+    const beforeVapiStart = performance.now();
+    console.log(`[TIMING] connect: calling vapi.start() at ${beforeVapiStart.toFixed(2)}ms (+${(beforeVapiStart - connectStart).toFixed(2)}ms since connect() entered)`);
     try {
       await vapi.start(assistantId, overrides);
+      const afterVapiStart = performance.now();
+      console.log(`[TIMING] connect: vapi.start() resolved at ${afterVapiStart.toFixed(2)}ms (+${(afterVapiStart - beforeVapiStart).toFixed(2)}ms)`);
     } catch (err: any) {
       const msg = err?.message ?? (typeof err === 'string' ? err : JSON.stringify(err)) ?? 'Failed to start Vapi call';
       console.error('[Vapi] Start error:', JSON.stringify(err));

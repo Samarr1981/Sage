@@ -18,6 +18,55 @@ function getClientIp(req: NextRequest): string {
   return forwardedFor?.split(',')[0]?.trim() || 'unknown';
 }
 
+// Module-level cache for the dashboard assistant's non-model config (voice,
+// transcriber, analysisPlan, etc.). Measured baseline: this GET costs
+// 164-417ms on every single call despite that config almost never changing —
+// caching it turns most requests into a single POST. Manual invalidation:
+// restart the server (or wait out the TTL) after changing the dashboard
+// assistant in the Vapi UI.
+let cachedBaseConfig: Record<string, unknown> | null = null;
+let cachedAt = 0;
+const DASHBOARD_CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function getBaseConfig(privateKey: string): Promise<Record<string, unknown>> {
+  const now = Date.now();
+  if (cachedBaseConfig && now - cachedAt < DASHBOARD_CACHE_TTL_MS) {
+    console.log(`[TIMING] Realtime Start-Call: Using cached dashboard assistant config (age ${now - cachedAt}ms)`);
+    return cachedBaseConfig;
+  }
+
+  const dashboardRes = await fetch(`https://api.vapi.ai/assistant/${DASHBOARD_ASSISTANT_ID}`, {
+    headers: { Authorization: `Bearer ${privateKey}` },
+  });
+
+  if (!dashboardRes.ok) {
+    const text = await dashboardRes.text();
+    console.error('[Vapi] Failed to fetch dashboard assistant:', dashboardRes.status, text);
+    throw new Error('Failed to load base assistant config');
+  }
+
+  const dashboardAssistant = await dashboardRes.json();
+
+  // Strip identity/timestamp fields (not valid on create) and the fields
+  // we're deliberately overriding below; keep everything else (voice,
+  // transcriber, analysisPlan, etc.) as-is from the dashboard config.
+  const {
+    id: _id,
+    orgId: _orgId,
+    createdAt: _createdAt,
+    updatedAt: _updatedAt,
+    model: _model,
+    firstMessageMode: _firstMessageMode,
+    maxDurationSeconds: _maxDurationSeconds,
+    isServerUrlSecretSet: _isServerUrlSecretSet,
+    ...baseConfig
+  } = dashboardAssistant;
+
+  cachedBaseConfig = baseConfig;
+  cachedAt = now;
+  return baseConfig;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const privateKey = process.env.VAPI_PRIVATE_KEY;
@@ -51,35 +100,17 @@ export async function POST(req: NextRequest) {
 
     // Copy the dashboard assistant's non-model config (voice, transcriber,
     // analysis plan, etc.) so behavior doesn't silently change just because
-    // the model + first message now come from this route instead.
-    const dashboardRes = await fetch(`https://api.vapi.ai/assistant/${DASHBOARD_ASSISTANT_ID}`, {
-      headers: { Authorization: `Bearer ${privateKey}` },
-    });
-
-    if (!dashboardRes.ok) {
-      const text = await dashboardRes.text();
-      console.error('[Vapi] Failed to fetch dashboard assistant:', dashboardRes.status, text);
-      return NextResponse.json({ error: 'Failed to load base assistant config' }, { status: 502 });
+    // the model + first message now come from this route instead. Cached —
+    // see getBaseConfig — since this config almost never changes.
+    let baseConfig: Record<string, unknown>;
+    try {
+      baseConfig = await getBaseConfig(privateKey);
+    } catch (err: any) {
+      return NextResponse.json({ error: err.message || 'Failed to load base assistant config' }, { status: 502 });
     }
 
-    const dashboardAssistant = await dashboardRes.json();
     const t1 = Date.now();
-    console.log(`[TIMING] Realtime Start-Call: Fetched dashboard assistant at ${t1} (+${t1 - t0}ms)`);
-
-    // Strip identity/timestamp fields (not valid on create) and the fields
-    // we're deliberately overriding below; keep everything else (voice,
-    // transcriber, analysisPlan, etc.) as-is from the dashboard config.
-    const {
-      id: _id,
-      orgId: _orgId,
-      createdAt: _createdAt,
-      updatedAt: _updatedAt,
-      model: _model,
-      firstMessageMode: _firstMessageMode,
-      maxDurationSeconds: _maxDurationSeconds,
-      isServerUrlSecretSet: _isServerUrlSecretSet,
-      ...baseConfig
-    } = dashboardAssistant;
+    console.log(`[TIMING] Realtime Start-Call: Base config ready at ${t1} (+${t1 - t0}ms)`);
 
     const createRes = await fetch('https://api.vapi.ai/assistant', {
       method: 'POST',

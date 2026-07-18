@@ -1684,9 +1684,12 @@ export default function Home() {
 
   const agentStateRef = useRef<ExaminerState | null>(null);
   const isMobile = useRef(false);
-  // Mobile pre-fetch: stores the initialization promise so handleReadyBegin
-  // can await it without a network round-trip inside the gesture handler.
-  const mobileInitPromiseRef = useRef<Promise<{ plan: InterviewPlan; assistantId: string }> | null>(null);
+  // Optimistic pre-fetch: fired as soon as the form is submitted (both mobile
+  // and desktop), so initialize + start-call + vapi-token are already in
+  // flight (or done) while the pre-interview instructions modal is showing.
+  // handleReadyBegin (mobile) and handleStart (desktop) both await this
+  // instead of starting their own fetches.
+  const initPromiseRef = useRef<Promise<{ plan: InterviewPlan; assistantId: string; vapiToken: string }> | null>(null);
   const userSyncedRef = useRef(false);
   // Holds the form payload while the pre-interview instructions modal is
   // shown, so handleInstructionsAcknowledged can resume the start flow.
@@ -1988,26 +1991,64 @@ export default function Home() {
       setTimeout(() => setLoadingMsg('Building interview areas...'), 800);
       setTimeout(() => setLoadingMsg('Connecting to Sage...'), 1600);
 
-      const t1 = performance.now();
-      console.log(`[TIMING] handleStart: Initializing topic areas at ${t1.toFixed(2)}ms`);
+      let plan: InterviewPlan;
+      let assistantId: string;
+      let vapiToken: string;
 
-      const initRes = await fetch('/api/realtime/initialize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          resumePdfBase64: payload.resumePdfBase64,
-          jobDescription: payload.jobDescription,
-          roundType: payload.roundType,
-        }),
-      });
+      if (initPromiseRef.current) {
+        // Optimistic prefetch (fired in handleFormSubmit, as soon as the form
+        // was submitted — same pattern mobile already used) is likely already
+        // done or well underway by the time the instructions modal is
+        // dismissed — await it instead of starting fresh fetches here.
+        ({ plan, assistantId, vapiToken } = await initPromiseRef.current);
+        initPromiseRef.current = null;
+        const tReady = performance.now();
+        console.log(`[TIMING] handleStart: Prefetched plan/assistant/token resolved at ${tReady.toFixed(2)}ms (+${(tReady - t0).toFixed(2)}ms)`);
+      } else {
+        // Fallback — no prefetch in flight (shouldn't normally happen since
+        // handleFormSubmit always starts one). Do the fetches inline.
+        const t1 = performance.now();
+        console.log(`[TIMING] handleStart: No prefetch in flight — initializing topic areas at ${t1.toFixed(2)}ms`);
 
-      const initData = await initRes.json();
-      if (!initRes.ok) throw new Error(initData.error);
+        const initRes = await fetch('/api/realtime/initialize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            resumePdfBase64: payload.resumePdfBase64,
+            jobDescription: payload.jobDescription,
+            roundType: payload.roundType,
+          }),
+        });
+        const initData = await initRes.json();
+        if (!initRes.ok) throw new Error(initData.error);
+        plan = initData;
+        const t2 = performance.now();
+        console.log(`[TIMING] handleStart: Topic areas initialized at ${t2.toFixed(2)}ms (+${(t2 - t1).toFixed(2)}ms)`);
 
-      const plan: InterviewPlan = initData;
+        // start-call and vapi-token are independent (the token doesn't depend
+        // on the plan or assistantId) — fire them concurrently.
+        const [startCallRes, vapiTokenRes] = await Promise.all([
+          fetch('/api/realtime/start-call', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ plan, roundType: payload.roundType }),
+          }),
+          fetch('/api/realtime/vapi-token', { method: 'POST' }),
+        ]);
+        const startCallData = await startCallRes.json();
+        if (!startCallRes.ok) throw new Error(startCallData.error);
+        assistantId = startCallData.assistantId;
+
+        const vapiTokenData = await vapiTokenRes.json();
+        if (!vapiTokenRes.ok) throw new Error(vapiTokenData.error || 'Failed to fetch Vapi token');
+        vapiToken = vapiTokenData.token;
+
+        const tReady = performance.now();
+        console.log(`[TIMING] handleStart: start-call + vapi-token resolved (parallel) at ${tReady.toFixed(2)}ms (+${(tReady - t2).toFixed(2)}ms)`);
+      }
+
       planRef.current = plan;
-      const t2 = performance.now();
-      console.log(`[TIMING] handleStart: Topic areas initialized at ${t2.toFixed(2)}ms (+${(t2-t1).toFixed(2)}ms)`);
+      assistantIdRef.current = assistantId;
 
       // Commit plan values to Home state (used by session/complete display)
       setRole(plan.role);
@@ -2017,23 +2058,14 @@ export default function Home() {
       realtimeSession.initializeInterview(plan.topicAreas);
       setTopicAreas(plan.topicAreas);
 
-      const startCallRes = await fetch('/api/realtime/start-call', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan, roundType: payload.roundType }),
-      });
-      const startCallData = await startCallRes.json();
-      if (!startCallRes.ok) throw new Error(startCallData.error);
-      assistantIdRef.current = startCallData.assistantId;
-
       const t3 = performance.now();
       console.log(`[TIMING] handleStart: Connecting to Vapi at ${t3.toFixed(2)}ms`);
 
-      await realtimeSession.connect(startCallData.assistantId, {
+      await realtimeSession.connect(assistantId, {
         topic: plan.role,
         level: plan.seniority,
         interviewType: payload.roundType,
-      });
+      }, vapiToken);
 
       const t4 = performance.now();
       console.log(`[TIMING] handleStart: Realtime session ready at ${t4.toFixed(2)}ms (+${(t4-t3).toFixed(2)}ms)`);
@@ -2066,12 +2098,14 @@ export default function Home() {
   }, [realtimeSession]);
 
   // Intercepts the form's onStart.
-  // Shows the pre-interview instructions modal first — the interview only
-  // actually begins once the user explicitly dismisses it (see
-  // handleInstructionsAcknowledged), which then follows the existing path:
-  // Desktop → calls handleStart immediately.
-  // Mobile  → shows ReadyScreen overlay so the user can unlock audio in their own tap.
-
+  // Fires the optimistic prefetch (initialize → start-call + vapi-token)
+  // immediately, for both desktop and mobile — it overlaps with however long
+  // the user takes to read and dismiss the pre-interview instructions modal.
+  // The interview only actually begins once the user explicitly dismisses
+  // that modal (see handleInstructionsAcknowledged):
+  // Desktop → calls handleStart, which awaits this same prefetch.
+  // Mobile  → shows ReadyScreen overlay so the user can unlock audio in
+  //           their own tap; handleReadyBegin awaits this prefetch too.
   const handleFormSubmit = useCallback((
     payload: { resumePdfBase64: string; jobDescription: string; roundType: 'screening' | 'technical' | 'final' },
   ) => {
@@ -2081,48 +2115,53 @@ export default function Home() {
       return;
     }
 
-    const isMobileDevice =
-      /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ||
-      window.innerWidth < 768 ||
-      ('ontouchstart' in window);
-
     setShowForm(false);
 
-    if (isMobileDevice) {
-      // Pre-fetch the plan NOW while the instructions modal (and then
-      // ReadyScreen) are displayed so handleReadyBegin can start Vapi
-      // immediately after "I'm Ready" — no network round-trip inside
-      // the gesture handler, which would invalidate iOS's user-gesture audio context.
-      mobileInitPromiseRef.current = fetch('/api/realtime/initialize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          resumePdfBase64: payload.resumePdfBase64,
-          jobDescription: payload.jobDescription,
-          roundType: payload.roundType,
-        }),
-      }).then(async (res) => {
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error);
-        const plan: InterviewPlan = data;
-        setRole(plan.role);
-        setExperienceLevel(plan.seniority);
-        setInterviewType(payload.roundType as any);
+    const mt0 = performance.now();
+    console.log(`[TIMING] handleFormSubmit (prefetch): starting initialize at ${mt0.toFixed(2)}ms`);
+    initPromiseRef.current = fetch('/api/realtime/initialize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        resumePdfBase64: payload.resumePdfBase64,
+        jobDescription: payload.jobDescription,
+        roundType: payload.roundType,
+      }),
+    }).then(async (res) => {
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      const plan: InterviewPlan = data;
+      setRole(plan.role);
+      setExperienceLevel(plan.seniority);
+      setInterviewType(payload.roundType as any);
 
-        // Chain the assistant-mint call so assistantId is ready before the
-        // gesture-triggered vapi.start() in handleReadyBegin — no network
-        // request happens inside the gesture handler itself.
-        const startCallRes = await fetch('/api/realtime/start-call', {
+      const mt1 = performance.now();
+      console.log(`[TIMING] handleFormSubmit (prefetch): initialize resolved at ${mt1.toFixed(2)}ms (+${(mt1 - mt0).toFixed(2)}ms)`);
+
+      // start-call and vapi-token are independent (the token doesn't depend
+      // on the plan or assistantId) — fire them concurrently. Both are ready
+      // before the gesture-triggered vapi.start() on mobile, or before
+      // handleStart calls connect() on desktop — no network request happens
+      // inside either of those call sites.
+      const [startCallRes, vapiTokenRes] = await Promise.all([
+        fetch('/api/realtime/start-call', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ plan, roundType: payload.roundType }),
-        });
-        const startCallData = await startCallRes.json();
-        if (!startCallRes.ok) throw new Error(startCallData.error);
+        }),
+        fetch('/api/realtime/vapi-token', { method: 'POST' }),
+      ]);
+      const startCallData = await startCallRes.json();
+      if (!startCallRes.ok) throw new Error(startCallData.error);
 
-        return { plan, assistantId: startCallData.assistantId as string };
-      });
-    }
+      const vapiTokenData = await vapiTokenRes.json();
+      if (!vapiTokenRes.ok) throw new Error(vapiTokenData.error || 'Failed to fetch Vapi token');
+
+      const mt2 = performance.now();
+      console.log(`[TIMING] handleFormSubmit (prefetch): start-call + vapi-token resolved (parallel) at ${mt2.toFixed(2)}ms (+${(mt2 - mt1).toFixed(2)}ms)`);
+
+      return { plan, assistantId: startCallData.assistantId as string, vapiToken: vapiTokenData.token as string };
+    });
 
     pendingStartPayloadRef.current = payload;
     setShowInstructionsModal(true);
@@ -2159,7 +2198,7 @@ export default function Home() {
     setLoadingMsg('Connecting to Sage...');
 
     try {
-      const { plan, assistantId } = await (mobileInitPromiseRef.current ?? Promise.reject(new Error('No init data')));
+      const { plan, assistantId, vapiToken } = await (initPromiseRef.current ?? Promise.reject(new Error('No init data')));
       planRef.current = plan;
       assistantIdRef.current = assistantId;
 
@@ -2182,7 +2221,7 @@ export default function Home() {
         topic: plan.role,
         level: plan.seniority,
         interviewType: plan.roundType,
-      });
+      }, vapiToken);
 
       setAppPhase('session');
       await realtimeSession.startAudioCapture();

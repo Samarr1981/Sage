@@ -123,6 +123,7 @@ export async function POST(req: NextRequest) {
 
     const t2 = Date.now();
     console.log(`[TIMING] Realtime Initialize: LLM response received at ${t2} (+${t2 - t1}ms)`);
+    console.log(`[TIMING] Realtime Initialize: token usage — input: ${response.usage.input_tokens}, output: ${response.usage.output_tokens} (max_tokens cap: 2500), stop_reason: ${response.stop_reason}`);
 
     const textBlock = response.content.find((b) => b.type === 'text');
 const raw = textBlock && textBlock.type === 'text' ? textBlock.text : '';

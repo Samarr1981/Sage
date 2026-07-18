@@ -19,6 +19,9 @@ function getClientIp(req: NextRequest): string {
 
 export async function POST(req: NextRequest) {
   try {
+    const t0 = Date.now();
+    console.log(`[TIMING] Vapi Token API: Request received at ${t0}`);
+
     const privateKey = process.env.VAPI_PRIVATE_KEY;
     if (!privateKey) {
       return NextResponse.json({ error: 'VAPI_PRIVATE_KEY is not configured' }, { status: 500 });
@@ -54,6 +57,9 @@ export async function POST(req: NextRequest) {
       algorithm: 'HS256',
       expiresIn: TOKEN_TTL_SECONDS,
     });
+
+    const t1 = Date.now();
+    console.log(`[TIMING] Vapi Token API: Minted at ${t1} (+${t1 - t0}ms)`);
 
     return NextResponse.json({ token });
   } catch (err: any) {
