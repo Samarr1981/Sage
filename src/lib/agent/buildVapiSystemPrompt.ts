@@ -11,6 +11,7 @@ export type InterviewPlan = {
   gapsToProbe: { gap: string; howToProbe: string }[];
   strengthsToConfirm: string[];
   topicAreas: { id: string; name: string; covered: boolean; score: number | null; questionCount: number }[];
+  namedEntities: string[];
 };
 
 export function buildVapiSystemPrompt(plan: InterviewPlan, roundType: 'screening' | 'technical' | 'final'): string {

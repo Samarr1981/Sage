@@ -49,6 +49,11 @@ Rules:
 - Each area must be directly relevant to this specific role, seniority, and round type.
 - "gapsToProbe" highlights mismatches or missing signals between the resume and JD requirements.
 - "strengthsToConfirm" lists specific resume claims worth verifying in the interview.
+- "namedEntities" is a dedicated, guaranteed extraction field — separate from your analysis
+  prose elsewhere. List every project, product, internal tool, or system the candidate names
+  verbatim in the resume (e.g. "Rezzy", "Project Atlas"), copied exactly as written, even if
+  it isn't tied to a metric or otherwise discussed elsewhere in the plan. Do not invent names
+  that aren't in the resume. Empty array if the resume names none.
 - Respond ONLY with the JSON object. No markdown, no explanation, no preamble.
 
 Required JSON shape:
@@ -66,7 +71,8 @@ Required JSON shape:
     }
   ],
   "gapsToProbe": [{ "gap": "string", "howToProbe": "string" }],
-  "strengthsToConfirm": ["string"]
+  "strengthsToConfirm": ["string"],
+  "namedEntities": ["string"]
 }
 ${ROUND_INSTRUCTIONS[roundType]}`;
 }
@@ -146,6 +152,10 @@ const raw = textBlock && textBlock.type === 'text' ? textBlock.text : '';
       questionCount: 0,
     }));
 
+    // Defensive default — namedEntities is guaranteed downstream (buildKeyterms
+    // reads it directly) even if the model ever omits or malforms the field.
+    const namedEntities = Array.isArray(parsed.namedEntities) ? parsed.namedEntities : [];
+
     const t3 = Date.now();
     console.log(`[TIMING] Realtime Initialize: Done at ${t3} (total: ${t3 - t0}ms)`);
 
@@ -154,6 +164,7 @@ const raw = textBlock && textBlock.type === 'text' ? textBlock.text : '';
       ...parsed,
       roundType, // always echo back the input value, even if Claude paraphrased it
       topicAreas,
+      namedEntities,
     });
 
   } catch (err) {

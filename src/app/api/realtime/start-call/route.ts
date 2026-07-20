@@ -33,33 +33,60 @@ const MAX_KEYTERMS = 100;
 // Capitalized words that show up as sentence-initial capitalization in the
 // free-text plan fields (gapsToProbe[].gap, strengthsToConfirm) rather than
 // as genuine proper nouns — filtered out so they don't waste keyterm slots.
+// Includes past-tense resume-bullet verbs: strengthsToConfirm entries often
+// start with one ("Designed the Kafka...", "Led migration...") rather than a
+// subject, which a plain capitalization regex can't otherwise distinguish
+// from a real proper noun.
 const KEYTERM_STOPWORDS = new Set([
   'the', 'this', 'that', 'these', 'those', 'a', 'an', 'it', 'its', 'they',
   'their', 'he', 'she', 'we', 'candidate', 'has', 'have', 'had', 'is', 'was',
   'were', 'will', 'should', 'could', 'would', 'no', 'not', 'strong', 'weak',
   'good', 'great', 'excellent', 'team', 'role', 'company', 'interview',
   'round', 'but', 'and', 'or', 'for', 'with', 'without', 'despite', 'while',
+  'claim', 'claimed', 'designed', 'led', 'wrote', 'implemented', 'built',
+  'created', 'developed', 'launched', 'managed', 'architected', 'owned',
+  'drove', 'delivered', 'shipped', 'improved', 'reduced', 'increased',
+  'optimized', 'migrated', 'established', 'founded', 'spearheaded',
+  'coordinated', 'directed', 'executed', 'introduced', 'automated',
+  'refactored', 'deployed', 'scaled', 'streamlined', 'enhanced',
+  'maintained', 'confirmed', 'verified', 'demonstrated',
 ]);
 
 // Pulls candidate proper nouns (tool/technology/company names) out of a
 // free-text sentence — matches runs of consecutive Capitalized/CamelCase
 // words (e.g. "Kubernetes", "Google Cloud", "Node.js"), then drops the
 // common sentence-starter words a plain regex can't distinguish from real
-// proper nouns.
+// proper nouns. A stopword-verb immediately adjacent to a real proper noun
+// (e.g. "Designed Kafka...") gets pulled into the same match since there's no
+// lowercase word between them — strip leading stopwords word-by-word before
+// the whole-phrase check below, rather than only checking the full phrase.
 function extractProperNouns(text: string): string[] {
   const matches = text.match(/\b[A-Z][a-zA-Z0-9]*(?:\.[a-zA-Z]+)?(?:\s+[A-Z][a-zA-Z0-9]*)*\b/g) || [];
   return matches
-    .map(m => m.trim())
+    .map(m => {
+      const words = m.trim().split(/\s+/);
+      while (words.length > 1 && KEYTERM_STOPWORDS.has(words[0].toLowerCase())) {
+        words.shift();
+      }
+      return words.join(' ');
+    })
     .filter(m => m.length > 2 && !KEYTERM_STOPWORDS.has(m.toLowerCase()));
 }
 
-// skillsToTest entries are already short, structured skill/tech phrases (per
-// the initialize prompt) so they're used directly; gapsToProbe/strengthsToConfirm
-// are freeform sentences, so proper-noun extraction runs on those instead.
+// skillsToTest and namedEntities entries are already short, structured
+// phrases (per the initialize prompt) so they're used directly;
+// gapsToProbe/strengthsToConfirm are freeform sentences, so proper-noun
+// extraction runs on those instead. namedEntities is the guaranteed source
+// for project/product names — see /api/realtime/initialize's system prompt —
+// since those aren't reliably present in the other fields.
 function buildKeyterms(plan: InterviewPlan): string[] {
   const candidates: string[] = [];
 
   if (plan.company) candidates.push(plan.company);
+
+  for (const entity of plan.namedEntities ?? []) {
+    if (entity?.trim()) candidates.push(entity.trim());
+  }
 
   for (const area of plan.areas ?? []) {
     for (const skill of area.skillsToTest ?? []) {
