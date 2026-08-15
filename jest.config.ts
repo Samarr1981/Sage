@@ -8,6 +8,9 @@ const config: Config = {
     }],
   },
   moduleNameMapper: {
+    // `server-only` throws when loaded outside a React Server Component.
+    // Route handlers pull it in transitively via Clerk/Supabase, so stub it.
+    '^server-only$': '<rootDir>/__mocks__/server-only.js',
     '^@/(.*)$': '<rootDir>/src/$1',
   },
   testMatch: [

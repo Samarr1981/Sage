@@ -10,6 +10,11 @@ jest.mock('@anthropic-ai/sdk', () => ({
   })),
 }));
 
+// Anonymous path: the route treats userId === null as "skip the save".
+jest.mock('@clerk/nextjs/server', () => ({
+  auth: jest.fn().mockResolvedValue({ userId: null }),
+}));
+
 jest.mock('@/lib/supabase', () => ({
   createAdminClient: jest.fn(() => ({
     from: jest.fn(() => ({

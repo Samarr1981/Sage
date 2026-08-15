@@ -13,9 +13,6 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.102.0",
     "@clerk/nextjs": "^5.7.5",
-    "@langchain/core": "^0.3.80",
-    "@langchain/langgraph": "^0.2.74",
-    "@langchain/openai": "^0.3.17",
     "@supabase/ssr": "^0.10.3",
     "@supabase/supabase-js": "^2.106.0",
     "@vapi-ai/web": "^2.5.2",

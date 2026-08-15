@@ -71,6 +71,8 @@ describe('POST /api/realtime/initialize', () => {
 
     mockCreate.mockResolvedValueOnce({
       content: [{ type: 'text', text: JSON.stringify(mockPlan) }],
+      usage: { input_tokens: 0, output_tokens: 0 },
+      stop_reason: 'end_turn',
     });
 
     const res = await POST(makeRequest(validBody));
